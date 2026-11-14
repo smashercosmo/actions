@@ -1,5 +1,11 @@
 # actions
 
+## 0.2.0
+
+### Minor Changes
+
+- Add the `require-change-intent` action, which fails a pull request that doesn't add a change intent.
+
 ## 0.1.0
 
 ### Minor Changes
