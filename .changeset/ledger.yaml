@@ -2,3 +2,7 @@ actions@0.1.0:
   dir: ""
   intents:
     - funny-deers-flash
+actions@0.2.0:
+  dir: ""
+  intents:
+    - brave-lamps-glow
