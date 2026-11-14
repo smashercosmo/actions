@@ -115,21 +115,12 @@ jobs:
           app-slug: ${{ steps.app-token.outputs.app-slug }}
           format-command: pnpm exec oxfmt
 
-  # The same checks as CI, on the exact commit that is about to be released.
-  # Among them that the committed `dist` folders match the sources, as those
-  # are what a release hands out
-  verify:
-    needs: plan
-    if: needs.plan.outputs.action == 'release'
-    permissions:
-      contents: read
-    uses: $/.github/workflows/ci.yml
-
-  # Waits for verify, so a draft is only created for a commit that passed.
-  # Draft releases don't need to trigger other workflows, so GITHUB_TOKEN is
-  # enough
+  # Doesn't run the checks again: the release PR had to pass CI to be merged,
+  # and CI runs on the push to main on its own. The draft is published by
+  # hand, so a failed run there can still stop the release. Draft releases
+  # don't need to trigger other workflows, so GITHUB_TOKEN is enough
   release:
-    needs: [plan, verify]
+    needs: plan
     if: needs.plan.outputs.action == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 5

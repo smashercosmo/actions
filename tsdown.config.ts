@@ -8,6 +8,7 @@ const ACTIONS = {
   "create-github-release": ["index.ts"],
   "create-release-pr": ["index.ts"],
   "create-token": ["index.ts", "post.ts"],
+  "require-change-intent": ["index.ts"],
 } as const;
 
 /**

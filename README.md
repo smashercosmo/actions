@@ -1,14 +1,15 @@
 # actions
 
 GitHub Actions for releasing pnpm workspaces: a release PR built from pending
-change intents, draft GitHub releases built from the changelogs, and the
-GitHub App token both of them need.
+change intents, draft GitHub releases built from the changelogs, the GitHub App
+token both of them need, and a check that every pull request adds an intent.
 
 | Action                                             | Description                                                                       |
 | -------------------------------------------------- | --------------------------------------------------------------------------------- |
 | [`create-token`](./create-token)                   | Creates a GitHub App installation token and revokes it when the job ends.         |
 | [`create-release-pr`](./create-release-pr)         | Applies pending change intents and opens or updates a release PR.                 |
 | [`create-github-release`](./create-github-release) | Creates a GitHub release from `CHANGELOG.md` for every unreleased public package. |
+| [`require-change-intent`](./require-change-intent) | Fails a pull request that doesn't add a change intent.                            |
 
 ## Usage
 
@@ -101,6 +102,26 @@ release, as `v<version>` tags would clash there.
 | `token`           | yes      | GitHub token with `contents` write permission.                                                                                                   |
 | `draft`           | no       | Create draft releases, `false` by default. The tag is created once a draft is published.                                                         |
 | `include-private` | no       | Also release private packages that have a version, `false` by default. For a repository that is versioned and tagged but never published to npm. |
+
+### require-change-intent
+
+Fails when the pull request doesn't add a change intent to `.changeset/`
+(`pnpm change`, or `pnpm change --bump none` for a change that needs no
+release). The release PR passes without one: it's the only pull request that
+changes `.changeset/ledger.yaml`.
+
+Runs on `pull_request` events only, with the merge commit of the pull request
+checked out with `fetch-depth: 2`, which is the default checkout of the event
+plus its parents. Make it a required status check of the base branch.
+
+```yaml
+- uses: actions/checkout@<commit hash>
+  with:
+    persist-credentials: false
+    fetch-depth: 2
+
+- uses: smashercosmo/actions/require-change-intent@<commit hash>
+```
 
 ## Development
 
