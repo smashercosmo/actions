@@ -1,5 +1,11 @@
 # actions
 
+## 0.3.0
+
+### Minor Changes
+
+- Add the reusable `ci.yml` and `release.yml` workflows.
+
 ## 0.2.0
 
 ### Minor Changes
