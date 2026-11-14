@@ -174,6 +174,7 @@ async function getVersionCommit(
 try {
   const token = getInput("token", { required: true });
   const draft = getBooleanInput("draft");
+  const includePrivate = getBooleanInput("include-private");
   const sha = getEnv("GITHUB_SHA");
 
   const { stdout: workspacePackagesOutput } = await getExecOutput(
@@ -186,16 +187,25 @@ try {
     .parse(JSON.parse(workspacePackagesOutput));
 
   /**
-   * Tags are "v<version>", which is only unique with one public package. More
+   * Packages without a version are never released, e.g. the root of a
+   * workspace. Private ones only when asked for: they aren't published to npm,
+   * but a repository can still be versioned and tagged
+   */
+  const releasablePackages = workspacePackages.flatMap(
+    ({ name, version, path: packagePath, private: isPrivate }) =>
+      version === undefined || (isPrivate && !includePrivate)
+        ? []
+        : [{ name, version, packagePath }],
+  );
+
+  /**
+   * Tags are "v<version>", which is only unique with one released package. More
    * packages need "<name>@<version>" tags, which would break the existing tag
    * history, so fail instead of creating clashing tags
    */
-  const publicPackages = workspacePackages.filter(
-    ({ private: isPrivate, version }) => !isPrivate && version !== undefined,
-  );
-  if (publicPackages.length > 1) {
+  if (releasablePackages.length > 1) {
     throw new Error(
-      `"v<version>" tags only work with one public package, found ${publicPackages.length}: ${publicPackages.map(({ name }) => name).join(", ")}`,
+      `"v<version>" tags only work with one released package, found ${releasablePackages.length}: ${releasablePackages.map(({ name }) => name).join(", ")}`,
     );
   }
 
@@ -203,12 +213,8 @@ try {
 
   const existingTags = new Set(await getExistingTags(request));
 
-  const packagesToRelease = workspacePackages.flatMap(
-    ({ name, version, path: packagePath, private: isPrivate }) => {
-      if (isPrivate || version === undefined) {
-        return [];
-      }
-
+  const packagesToRelease = releasablePackages.flatMap(
+    ({ name, version, packagePath }) => {
       const tag = `v${version}`;
 
       if (existingTags.has(tag)) {

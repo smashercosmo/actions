@@ -12,8 +12,10 @@ GitHub App token both of them need.
 
 ## Usage
 
-Pin the actions to a commit hash, not to a branch or a tag: the hash is the
-only reference that can't be moved to other code later. Dependabot's
+Pin the actions to the commit hash of a
+[release](https://github.com/smashercosmo/actions/releases), not to a branch
+or a tag: the hash is the only reference that can't be moved to other code
+later. Dependabot's
 `github-actions` ecosystem keeps the hashes up to date.
 
 ### create-token
@@ -84,8 +86,8 @@ the section of that version in the package's `CHANGELOG.md`, and the tag points
 to the commit that set the version in its `package.json`.
 
 The repository has to be checked out with its full history (`fetch-depth: 0`),
-and pnpm has to be installed. Fails for a workspace with more than one public
-package, as `v<version>` tags would clash there.
+and pnpm has to be installed. Fails for a workspace with more than one package to
+release, as `v<version>` tags would clash there.
 
 ```yaml
 - uses: smashercosmo/actions/create-github-release@<commit hash>
@@ -94,10 +96,11 @@ package, as `v<version>` tags would clash there.
     draft: true
 ```
 
-| Input   | Required | Description                                                                              |
-| ------- | -------- | ---------------------------------------------------------------------------------------- |
-| `token` | yes      | GitHub token with `contents` write permission.                                           |
-| `draft` | no       | Create draft releases, `false` by default. The tag is created once a draft is published. |
+| Input             | Required | Description                                                                                                                                      |
+| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `token`           | yes      | GitHub token with `contents` write permission.                                                                                                   |
+| `draft`           | no       | Create draft releases, `false` by default. The tag is created once a draft is published.                                                         |
+| `include-private` | no       | Also release private packages that have a version, `false` by default. For a repository that is versioned and tagged but never published to npm. |
 
 ## Development
 
@@ -126,6 +129,28 @@ change: CI fails when `dist` doesn't match the sources.
 
 To add an action, create a folder with its `action.yml` and sources, and add
 its entry files to `tsdown.config.ts`.
+
+## Releases
+
+Every pull request has to add a change intent to `.changeset/`:
+
+```bash
+# Describes the change and how it bumps the version
+pnpm change
+
+# For a change that needs no release
+pnpm change --bump none
+```
+
+The release workflow turns the pending intents into a release PR with the new
+version and the changelog. Merging it drafts a GitHub release, and publishing
+the draft creates the `v<version>` tag. Nothing is published to npm: pin the
+actions to the commit hash of a release.
+
+The workflow needs a GitHub App that is installed on this repository with
+`contents` and `pull-requests` write permissions, and a `release` environment
+with the app's client ID in the `RELEASE_BOT_CLIENT_ID` variable and its
+private key in the `RELEASE_BOT_PRIVATE_KEY` secret.
 
 ## License
 
