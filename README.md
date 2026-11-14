@@ -213,6 +213,12 @@ The repository needs a `release` environment that has the GitHub App's private
 key. With `npm`, the npm trusted publisher of every package names the calling
 workflow (e.g. `release.yml`), not this one, and the `release` environment.
 
+The GitHub App's client ID has to be a repository or organization variable,
+not a variable of the `release` environment: the calling job reads it, and a
+job that calls a reusable workflow can't have an environment. The private key
+can be a secret of the environment, as secrets passed by name are resolved in
+the job of the workflow that sets the environment.
+
 | Input                 | Required | Description                                                                          |
 | --------------------- | -------- | ------------------------------------------------------------------------------------ |
 | `app-client-id`       | yes      | Client ID of the GitHub App that opens the release PR.                               |
