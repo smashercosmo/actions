@@ -1,0 +1,14 @@
+# Logs
+*.log
+pnpm-debug.log*
+.pnpm-store
+
+# The `dist` folders of the actions are committed: GitHub runs them from there
+node_modules
+*.tsbuildinfo
+.DS_Store
+
+# Editor directories and files
+.idea/**
+!.idea/externalDependencies.xml
+!.idea/OxfmtSettings.xml

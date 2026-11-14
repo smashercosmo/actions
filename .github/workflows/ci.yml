@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# Pull requests: one run per branch, a new push cancels the old run. Pushes to
+# main get a group of their own (the run id), so they never wait for each other
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Installs pnpm from "packageManager" and Node from "devEngines.runtime"
+      # in package.json, then runs `pnpm install --frozen-lockfile`. Without a
+      # cache: what is built here is compared with what the actions run from,
+      # and a cache is one more way for something foreign to get into it
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        with:
+          require-lockfile: true
+
+      - name: Lint and type-check
+        run: pnpm lint
+
+      - name: Check formatting
+        run: pnpm exec oxfmt --check
+
+      - name: Build
+        run: pnpm build
+
+      # GitHub runs the actions from the committed `dist` folders, so they have
+      # to be exactly what the sources build to. Fails when a change to the
+      # sources or the dependencies was committed without rebuilding, or when
+      # `dist` was edited by hand
+      - name: Check that the built actions are up to date
+        run: |
+          changed=$(git status --porcelain -- '*/dist')
+
+          if [ -n "$changed" ]; then
+            echo "::error::The committed dist folders don't match the sources. Run \`pnpm build\` and commit the result"
+            echo "$changed"
+            git diff -- '*/dist'
+            exit 1
+          fi

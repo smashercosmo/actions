@@ -1,0 +1,34 @@
+{
+  "name": "actions",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsdown",
+    "format": "oxfmt",
+    "lint:ox": "oxlint --type-aware",
+    "lint:types": "tsc -b",
+    "lint": "pnpm lint:ox && pnpm lint:types"
+  },
+  "devDependencies": {
+    "@actions/core": "3.0.1",
+    "@actions/exec": "3.0.0",
+    "@actions/github": "9.1.1",
+    "@octokit/auth-app": "8.3.1",
+    "@types/node": "24.19.2",
+    "eslint-plugin-regexp": "3.3.3",
+    "oxfmt": "0.76.0",
+    "oxlint": "1.91.0",
+    "oxlint-tsgolint": "7.0.2005",
+    "tsdown": "0.23.4",
+    "typescript": "7.0.2",
+    "zod": "4.6.7"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^24.0.0",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@12.11.2"
+}

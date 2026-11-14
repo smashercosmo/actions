@@ -1,0 +1,43 @@
+{
+  "include": ["*/*.ts", "*.config.ts"],
+  "exclude": ["node_modules", "*/dist"],
+  "compilerOptions": {
+    /**
+     * "preserve" assumes,
+     * that "moduleResolution" is "bundler"
+     */
+    "module": "preserve",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "target": "es2024",
+    "lib": ["es2024"],
+    "types": ["node"],
+    "resolveJsonModule": true,
+    "moduleDetection": "force",
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    /**
+     * The actions are bundled with tsdown, so TypeScript only checks types
+     * here and emits nothing.
+     */
+    "noEmit": true,
+    "incremental": true,
+    "tsBuildInfoFile": "node_modules/tsconfig.tsbuildinfo",
+
+    /**
+     * The "strict" setting is "true" by default now, so it isn't set here.
+     */
+    "allowArbitraryExtensions": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "erasableSyntaxOnly": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true
+  }
+}
