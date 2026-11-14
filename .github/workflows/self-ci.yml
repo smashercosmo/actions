@@ -1,0 +1,20 @@
+name: CI
+
+# CI of this repository: the reusable CI workflow, from the same commit (`$/`).
+# The concurrency group is set there
+#
+# Without a cache: GitHub runs the actions from the committed `dist` folders,
+# which CI checks against what the sources build to, and a cache is one more
+# way for something foreign to get into them
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  ci:
+    permissions:
+      contents: read
+    uses: $/.github/workflows/ci.yml

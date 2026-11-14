@@ -11,9 +11,16 @@ token both of them need, and a check that every pull request adds an intent.
 | [`create-github-release`](./create-github-release) | Creates a GitHub release from `CHANGELOG.md` for every unreleased public package. |
 | [`require-change-intent`](./require-change-intent) | Fails a pull request that doesn't add a change intent.                            |
 
+And reusable workflows that put them together:
+
+| Workflow                                         | Description                                                                      |
+| ------------------------------------------------ | -------------------------------------------------------------------------------- |
+| [`ci.yml`](./.github/workflows/ci.yml)           | Requires a change intent, then builds, lints, checks the formatting and tests.   |
+| [`release.yml`](./.github/workflows/release.yml) | Opens the release PR, then stages the packages on npm and drafts their releases. |
+
 ## Usage
 
-Pin the actions to the commit hash of a
+Pin the actions and workflows to the commit hash of a
 [release](https://github.com/smashercosmo/actions/releases), not to a branch
 or a tag: the hash is the only reference that can't be moved to other code
 later. Dependabot's
@@ -122,6 +129,101 @@ plus its parents. Make it a required status check of the base branch.
 
 - uses: smashercosmo/actions/require-change-intent@<commit hash>
 ```
+
+### ci.yml
+
+A `changeset` job that runs `require-change-intent` on pull requests (except
+Dependabot's), and a `check` job that runs `pnpm change status`, `pnpm build`,
+`pnpm lint`, `pnpm format --check` and `pnpm test`, if the workspace has a
+`test` script. The build must not change or add any file that isn't ignored,
+e.g. committed build output that is out of date.
+
+Sets its own concurrency group: one run per pull request, a new push cancels
+the old run. The calling workflow must not set one.
+
+```yaml
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  ci:
+    permissions:
+      contents: read
+    uses: smashercosmo/actions/.github/workflows/ci.yml@<commit hash>
+    with:
+      cache: true
+      playwright-browsers: chromium webkit firefox
+```
+
+| Input                 | Required | Description                                                                                                                                                                     |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cache`               | no       | Cache the pnpm store and the Playwright browsers between runs, `false` by default.                                                                                              |
+| `playwright-browsers` | no       | Playwright browsers to install before the tests, separated by spaces. Installed with the Playwright version of the first workspace package that depends on it. None by default. |
+
+The checks report as `ci / changeset` and `ci / check` (the calling job, then
+the job of the workflow). Use these names for the required status checks of
+the main branch ruleset.
+
+### release.yml
+
+On every push to main:
+
+- pending change intents → opens or updates the release PR with
+  `create-release-pr`, formatted with `pnpm format`.
+- the release PR was just merged, or the workflow was run manually → with
+  `npm: true`, runs `ci.yml` on the commit, builds `./packages/*` and stages
+  them on npm with `pnpm stage publish -r`. Then drafts the GitHub releases
+  with `create-github-release`.
+
+```yaml
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  release:
+    permissions:
+      contents: write
+      id-token: write
+    uses: smashercosmo/actions/.github/workflows/release.yml@<commit hash>
+    with:
+      app-client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+      npm: true
+    secrets:
+      app-private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+```
+
+The calling job sets the most the jobs of the workflow can get, and every job
+asks only for what it needs. Allow `id-token: write` even without `npm`:
+GitHub checks the permissions of every job when the run starts, skipped ones
+included.
+
+The repository needs a `release` environment that has the GitHub App's private
+key. With `npm`, the npm trusted publisher of every package names the calling
+workflow (e.g. `release.yml`), not this one, and the `release` environment.
+
+| Input                 | Required | Description                                                                          |
+| --------------------- | -------- | ------------------------------------------------------------------------------------ |
+| `app-client-id`       | yes      | Client ID of the GitHub App that opens the release PR.                               |
+| `npm`                 | no       | Stage the packages on npm, after running `ci.yml` on the commit. `false` by default. |
+| `include-private`     | no       | Also draft releases for private packages that have a version, `false` by default.    |
+| `cache`               | no       | Cache the pnpm store between runs, `false` by default. Passed on to `ci.yml`.        |
+| `playwright-browsers` | no       | Passed on to `ci.yml`, see there. Only used with `npm`.                              |
+
+| Secret            | Required | Description                                              |
+| ----------------- | -------- | -------------------------------------------------------- |
+| `app-private-key` | yes      | Private key of the GitHub App that opens the release PR. |
 
 ## Development
 
