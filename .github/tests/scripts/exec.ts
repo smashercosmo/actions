@@ -9,16 +9,29 @@ interface Registry {
   npmrcFile: string;
 }
 
-/** Run git in `cwd` and return trimmed stdout. */
-function git(cwd: string, args: readonly string[]) {
+/**
+ * Run git in `cwd` and return trimmed stdout. `input` is written to stdin, and
+ * `env` is added to the environment.
+ */
+function git(
+  cwd: string,
+  args: readonly string[],
+  {
+    input,
+    env = {},
+  }: { input?: string; env?: Readonly<Record<string, string>> } = {},
+) {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
+    env: { ...process.env, ...env },
     /**
-     * Disable stdin so git cannot prompt, and capture output for assertions and
-     * failure messages.
+     * Without `input`, disable stdin so git cannot prompt. Capture output for
+     * assertions and failure messages.
      */
-    stdio: ["ignore", "pipe", "pipe"],
+    ...(input === undefined
+      ? { stdio: ["ignore", "pipe", "pipe"] }
+      : { input, stdio: ["pipe", "pipe", "pipe"] }),
   }).trim();
 }
 

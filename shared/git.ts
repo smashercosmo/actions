@@ -140,6 +140,74 @@ function listStagedFiles() {
 }
 
 /**
+ * Returns the full ID of the object `rev` names, e.g. `HEAD` for the commit or
+ * `HEAD^{tree}` for its tree.
+ */
+function getObjectId(rev: string) {
+  const { stdout } = getExecOutput("git", ["rev-parse", "--verify", rev], {
+    silent: true,
+  });
+
+  return stdout.trim();
+}
+
+/** A change staged for the next commit, as `listStagedChanges` returns it. */
+interface StagedChange {
+  path: string;
+  /** File mode, e.g. `100644`. For a deleted file, the mode it had. */
+  mode: string;
+  /** ID of the staged content, or `undefined` for a deleted file. */
+  blob: string | undefined;
+}
+
+/**
+ * Lists the changes staged for the next commit, compared with `HEAD`.
+ *
+ * Rename detection is off, so a renamed file comes out as a deletion and an
+ * addition, and each change is about one path.
+ */
+function listStagedChanges(): StagedChange[] {
+  /**
+   * `--raw -z` prints `:<old mode> <new mode> <old id> <new id> <status>`, then
+   * the path, each ending with NUL.
+   */
+  const { stdout } = getExecOutput(
+    "git",
+    ["diff", "--staged", "--raw", "--no-renames", "--no-abbrev", "-z"],
+    { silent: true },
+  );
+  const fields = splitPaths(stdout);
+  const changes: StagedChange[] = [];
+
+  for (let index = 0; index < fields.length; index += 2) {
+    const [oldMode = "", newMode = "", , blob = "", status = ""] = (
+      fields[index] ?? ""
+    )
+      .slice(1)
+      .split(" ");
+    const deleted = status === "D";
+
+    changes.push({
+      path: fields[index + 1] ?? "",
+      mode: deleted ? oldMode : newMode,
+      blob: deleted ? undefined : blob,
+    });
+  }
+
+  return changes;
+}
+
+/**
+ * Returns the content of the blob `id` as text.
+ *
+ * The content is decoded as UTF-8, so it's only for text files.
+ */
+function readBlob(id: string) {
+  return getExecOutput("git", ["cat-file", "blob", id], { silent: true })
+    .stdout;
+}
+
+/**
  * Finds the most recent commit that added or removed `text` in `file`.
  *
  * When `file` still contains `text`, that commit introduced the current
@@ -159,10 +227,13 @@ function findLastCommitChanging(text: string, file: string) {
 export {
   findLastCommitChanging,
   getEmptyTreeId,
+  getObjectId,
   hasFileChanged,
   hasTag,
   isCommit,
   listAddedFiles,
   listFiles,
+  listStagedChanges,
   listStagedFiles,
+  readBlob,
 };

@@ -6,9 +6,10 @@ import type { GitHubResponse } from "#shared/github-response.ts";
 import type { Input } from "#shared/schema.ts";
 
 import type {
+  GitObjectSchema,
   PullRequestSchema,
+  RefSchema,
   ReleasePlanSchema,
-  UserSchema,
 } from "./schemas.ts";
 
 describe("schemas", () => {
@@ -18,10 +19,22 @@ describe("schemas", () => {
     >();
   });
 
-  it("should accept the user of the app's bot", () => {
-    expectTypeOf<GitHubResponse<"GET /users/{username}">>().toExtend<
-      Input<typeof UserSchema>
-    >();
+  it("should accept a created tree", () => {
+    expectTypeOf<
+      GitHubResponse<"POST /repos/{owner}/{repo}/git/trees">
+    >().toExtend<Input<typeof GitObjectSchema>>();
+  });
+
+  it("should accept a created commit", () => {
+    expectTypeOf<
+      GitHubResponse<"POST /repos/{owner}/{repo}/git/commits">
+    >().toExtend<Input<typeof GitObjectSchema>>();
+  });
+
+  it("should accept a matching ref", () => {
+    expectTypeOf<
+      GitHubResponse<"GET /repos/{owner}/{repo}/git/matching-refs/{ref}">[number]
+    >().toExtend<Input<typeof RefSchema>>();
   });
 
   it("should accept a listed pull request", () => {

@@ -95,6 +95,42 @@ const PullRequestSchema = z.object({
 });
 
 /**
+ * Inline `content` for added and changed files, `sha: null` for deleted ones,
+ * the two forms the release PR action sends.
+ */
+const TreeEntrySchema = z.strictObject({
+  path: z.string(),
+  mode: z.string(),
+  type: z.literal("blob"),
+});
+
+const ChangedTreeEntrySchema = TreeEntrySchema.extend({ content: z.string() });
+const DeletedTreeEntrySchema = TreeEntrySchema.extend({ sha: z.null() });
+
+const TreeSchema = z.strictObject({
+  base_tree: z.string(),
+  tree: z.array(z.union([ChangedTreeEntrySchema, DeletedTreeEntrySchema])),
+});
+
+/**
+ * GitHub signs a commit made by an app only without a custom author, committer,
+ * or signature, so the mock rejects those fields.
+ */
+const CommitSchema = z.strictObject({
+  message: z.string(),
+  tree: z.string(),
+  parents: z.array(z.string()),
+});
+
+const CreateRefSchema = z.strictObject({ ref: z.string(), sha: z.string() });
+
+/** The mock implements forced updates only. */
+const UpdateRefSchema = z.strictObject({
+  sha: z.string(),
+  force: z.literal(true),
+});
+
+/**
  * Extra release fields such as `draft: true` would change GitHub semantics the
  * mock does not implement.
  */
@@ -138,8 +174,11 @@ function mockEndpoint<TRoute extends Route>(
   }
 
   return ROUTES[method](
-    /** Convert GitHub route params to MSW params and match any host/port. */
-    `*${url.replaceAll(/\{(?<name>[^\{\}]+)\}/gv, ":$<name>")}`,
+    /**
+     * Convert GitHub route params to MSW params and match any host/port. A
+     * `{ref}` such as `heads/release` spans several path segments.
+     */
+    `*${url.replace("{ref}", ":ref+").replaceAll(/\{(?<name>[^\{\}]+)\}/gv, ":$<name>")}`,
     async ({ params, request }) => {
       /** Read text first so body-less requests do not hit JSON parse errors. */
       const text = await request.text();
@@ -164,8 +203,8 @@ function mockEndpoint<TRoute extends Route>(
  * Starts the GitHub REST API surface needed by the workflow tests. Node handles
  * TCP traffic from Docker; MSW handles route matching.
  *
- * Creating a release also creates its tag in the consumer's bare remote, just
- * like GitHub does.
+ * Git database requests and creating a release write to the consumer's bare
+ * remote, just like GitHub does.
  */
 async function createMockGitHubServer({
   remoteRepoDir,
@@ -205,13 +244,96 @@ async function createMockGitHubServer({
     }),
 
     /**
-     * The release PR action needs the bot user ID to form GitHub's noreply
-     * commit author email.
+     * Build the tree in an index of its own, starting from `base_tree`. Paths
+     * that aren't listed keep what they have there. `read-tree` replaces what
+     * the index had, so it can be reused.
      */
-    mockEndpoint("GET /users/{username}", 200, ({ params }) => ({
-      id: RELEASE_BOT_USER_ID,
-      login: params["username"] ?? "",
-    })),
+    mockEndpoint("POST /repos/{owner}/{repo}/git/trees", 201, ({ body }) => {
+      const { base_tree: baseTree, tree } = TreeSchema.parse(body);
+      const env = { GIT_INDEX_FILE: `${remoteRepoDir}/mock-tree-index` };
+
+      git(remoteRepoDir, ["read-tree", baseTree], { env });
+
+      /** Mode 0 removes a path from the index. */
+      const entries = tree.map((entry) => {
+        if (!("content" in entry)) {
+          return `0 ${"0".repeat(40)}\t${entry.path}`;
+        }
+
+        const blob = git(remoteRepoDir, ["hash-object", "-w", "--stdin"], {
+          input: entry.content,
+        });
+
+        return `${entry.mode} ${blob}\t${entry.path}`;
+      });
+
+      git(remoteRepoDir, ["update-index", "--index-info"], {
+        env,
+        input: `${entries.join("\n")}\n`,
+      });
+
+      return { sha: git(remoteRepoDir, ["write-tree"], { env }) };
+    }),
+
+    /** Author the commit as the app's bot, like GitHub does for app tokens. */
+    mockEndpoint("POST /repos/{owner}/{repo}/git/commits", 201, ({ body }) => {
+      const { message, tree, parents } = CommitSchema.parse(body);
+      const bot = `${RELEASE_BOT_SLUG}[bot]`;
+
+      return {
+        sha: git(
+          remoteRepoDir,
+          [
+            "commit-tree",
+            tree,
+            ...parents.flatMap((parent) => ["-p", parent]),
+            "-m",
+            message,
+          ],
+          {
+            env: {
+              GIT_AUTHOR_NAME: bot,
+              GIT_AUTHOR_EMAIL: `${RELEASE_BOT_USER_ID}+${bot}@users.noreply.github.com`,
+              GIT_COMMITTER_NAME: "GitHub",
+              GIT_COMMITTER_EMAIL: "noreply@github.com",
+            },
+          },
+        ),
+      };
+    }),
+
+    /** GitHub lists every ref that starts with `ref`, not only an exact match. */
+    mockEndpoint(
+      "GET /repos/{owner}/{repo}/git/matching-refs/{ref}",
+      200,
+      ({ params }) =>
+        git(remoteRepoDir, ["for-each-ref", "--format=%(refname)"])
+          .split("\n")
+          .filter((name) => name.startsWith(`refs/${params["ref"] ?? ""}`))
+          .map((name) => ({ ref: name })),
+    ),
+
+    /** An empty old value makes `update-ref` fail if the ref exists already. */
+    mockEndpoint("POST /repos/{owner}/{repo}/git/refs", 201, ({ body }) => {
+      const { ref, sha } = CreateRefSchema.parse(body);
+      git(remoteRepoDir, ["update-ref", ref, sha, ""]);
+
+      return { ref };
+    }),
+
+    /** `rev-parse` makes the update fail if the ref doesn't exist, like GitHub. */
+    mockEndpoint(
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
+      200,
+      ({ params, body }) => {
+        const ref = `refs/${params["ref"] ?? ""}`;
+        const { sha } = UpdateRefSchema.parse(body);
+        git(remoteRepoDir, ["rev-parse", "--verify", ref]);
+        git(remoteRepoDir, ["update-ref", ref, sha]);
+
+        return { ref };
+      },
+    ),
 
     /** Filter open PRs the same way the release action queries them. */
     mockEndpoint("GET /repos/{owner}/{repo}/pulls", 200, ({ query }) =>

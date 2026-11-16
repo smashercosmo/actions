@@ -146,7 +146,10 @@ describe("release.yml", () => {
       bump: "minor",
       summary: "Add a feature.",
     });
-    /** Preload an older release PR to verify the action updates it in place. */
+    /**
+     * Preload an older release PR and its branch to verify the action updates
+     * both in place.
+     */
     github.pulls.push({
       number: 1,
       title: "chore: release acme-lib@1.0.1",
@@ -154,6 +157,15 @@ describe("release.yml", () => {
       head: RELEASE_BRANCH_NAME,
       base: MAIN_BRANCH_NAME,
     });
+    git(repo, ["switch", "-c", RELEASE_BRANCH_NAME]);
+    git(repo, [
+      "commit",
+      "--allow-empty",
+      "-m",
+      "chore: release acme-lib@1.0.1",
+    ]);
+    git(repo, ["push", "origin", RELEASE_BRANCH_NAME]);
+    git(repo, ["switch", MAIN_BRANCH_NAME]);
 
     const result = await act()
       .withWorkflow({ body: getReleaseWorkflow() })
@@ -161,6 +173,17 @@ describe("release.yml", () => {
       .run({ signal });
 
     assertStatus(result, ActExecStatus.SUCCESS);
+
+    /** The old release commit is replaced, not built upon. */
+    const remote = consumer.remoteRepoDir;
+
+    expect({
+      parent: git(remote, ["rev-parse", `${RELEASE_BRANCH_NAME}^`]),
+      subject: git(remote, ["log", "-1", "--format=%s", RELEASE_BRANCH_NAME]),
+    }).toStrictEqual({
+      parent: git(remote, ["rev-parse", MAIN_BRANCH_NAME]),
+      subject: RELEASE_PR_TITLE,
+    });
     expect(github.pulls).toStrictEqual([
       {
         number: 1,

@@ -1,20 +1,18 @@
 name: Create Release PR
 description:
-  Applies pending change intents with `pnpm version -r`, then opens or updates
-  the release pull request.
+  Applies pending change intents with `pnpm version -r`, commits them to the
+  release branch through the GitHub API, so the commit is signed, then opens or
+  updates the release pull request.
 
 inputs:
   token:
     description: GitHub App installation token with write access to contents and pull requests.
     required: true
-  app-slug:
-    description: GitHub App slug to use for the release commit author.
-    required: true
   base:
     description: Branch targeted by the release pull request.
     default: main
   branch:
-    description: Branch used for the release pull request. It is force-pushed
+    description: Branch used for the release pull request. It is overwritten
       on every run, so reserve it for this action.
     default: release
   format-command:
