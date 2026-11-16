@@ -1,20 +1,23 @@
-import { getInput, setOutput, info, setFailed } from "@actions/core";
-import { exec, getExecOutput } from "@actions/exec";
-import { getOctokit, context } from "@actions/github";
-import { z } from "zod";
+import { getInput, info, setFailed, setOutput } from "#shared/core.ts";
+import { exec, getExecOutput } from "#shared/exec.ts";
+import { listStagedFiles } from "#shared/git.ts";
+import { createGitHubClient, getRepository } from "#shared/github.ts";
+import { array, parse } from "#shared/schema.ts";
+
+import { PullRequestSchema, ReleasePlanSchema, UserSchema } from "./schemas.ts";
 
 /**
- * What `pnpm version -r --json` prints. Checked, not assumed: if a pnpm update
- * changes the format, the action fails here with a clear message, instead of
- * opening a PR titled "release undefined@undefined"
+ * Applies pending change intents with `pnpm version -r` and returns the
+ * packages pnpm plans to publish.
  */
-const ReleasePlanSchema = z.array(
-  z.object({
-    name: z.string(),
-    currentVersion: z.string(),
-    newVersion: z.string(),
-  }),
-);
+function applyChangeIntents() {
+  const { stdout } = getExecOutput("pnpm", ["version", "-r", "--json"]);
+  return parse(
+    ReleasePlanSchema,
+    JSON.parse(stdout),
+    "`pnpm version -r --json`",
+  );
+}
 
 async function run() {
   const token = getInput("token", { required: true });
@@ -23,71 +26,82 @@ async function run() {
   const branch = getInput("branch", { required: true });
   const formatCommand = getInput("format-command");
 
-  const octokit = getOctokit(token);
-  const { owner, repo } = context.repo;
+  const github = createGitHubClient({ token, userAgent: "create-release-pr" });
+  const { owner, repo } = getRepository();
 
-  // Commit as the GitHub App's bot user
   const bot = `${appSlug}[bot]`;
-  const { data: botUser } = await octokit.rest.users.getByUsername({
-    username: bot,
-  });
-  await exec("git", ["config", "user.name", bot]);
-  await exec("git", [
+  const botUser = await github.request(
+    { method: "GET", path: `/users/${encodeURIComponent(bot)}` },
+    UserSchema,
+  );
+  exec("git", ["config", "user.name", bot]);
+  exec("git", [
     "config",
     "user.email",
     `${botUser.id}+${bot}@users.noreply.github.com`,
   ]);
-  await exec("git", ["switch", "-C", branch]);
 
-  const { stdout: planOutput } = await getExecOutput("pnpm", [
-    "version",
-    "-r",
-    "--json",
-  ]);
-  const parsedPlan = ReleasePlanSchema.safeParse(JSON.parse(planOutput));
+  exec("git", ["switch", "-C", branch]);
 
-  if (!parsedPlan.success) {
-    throw new Error(
-      `\`pnpm version -r --json\` printed an unexpected release plan:\n${z.prettifyError(parsedPlan.error)}`,
-    );
-  }
-
-  const plan = parsedPlan.data;
+  const releasePlan = applyChangeIntents();
 
   /**
-   * Every pending intent declines a release (`pnpm change --bump none`), so
-   * there's nothing to release. The intent files stay on the base branch until
-   * the next release PR removes them
+   * An empty plan means every pending change explicitly opted out of a release.
+   * Leave those intent files on the base branch for a future release PR.
    */
-  if (plan.length === 0) {
-    info("The pending change intents don't release anything, no PR needed");
+  if (releasePlan.length === 0) {
+    info("No packages need to be released. Skipping release PR creation.");
     return;
   }
 
-  await exec("git", ["add", "-A"]);
+  /**
+   * Pnpm keeps a package at its current version until that version is published
+   * on npm. Creating another release PR for the same version would mix new
+   * changes into the previous unpublished release.
+   */
+  const unreleased = releasePlan.filter(
+    ({ currentVersion, newVersion }) => currentVersion === newVersion,
+  );
 
-  // Format only the files pnpm touched
-  if (formatCommand !== "") {
-    const { stdout: changedFilesOutput } = await getExecOutput(
-      "git",
-      ["diff", "--cached", "--name-only", "--diff-filter=d", "-z"],
-      { silent: true },
+  if (unreleased.length > 0) {
+    const versions = unreleased
+      .map(({ name, currentVersion }) => `${name}@${currentVersion}`)
+      .join(", ");
+
+    throw new Error(
+      [
+        `${versions} isn't on npm yet, so this release PR would release it again.`,
+        `If it's staged, approve it with \`pnpm stage approve\`.`,
+        `If its release failed or never ran, re-run the release PR merge workflow.`,
+        `If the release PR was merged while change intents were pending,`,
+        `revert that merge instead. Then re-run this job.`,
+      ].join(" "),
     );
-    const changedFiles = changedFilesOutput.split("\0").filter(Boolean);
+  }
+
+  exec("git", ["add", "-A"]);
+
+  /**
+   * Format exactly the files `pnpm version` staged, then stage formatter
+   * output.
+   */
+  if (formatCommand !== "") {
+    const changedFiles = listStagedFiles();
 
     if (changedFiles.length > 0) {
-      await exec(formatCommand, changedFiles);
+      exec(formatCommand, changedFiles);
     }
   }
 
-  const title = `chore: release ${plan
+  const title = `chore: release ${releasePlan
     .map(({ name, newVersion }) => `${name}@${newVersion}`)
     .join(", ")}`;
 
   const body = [
-    "Merging this PR stages the following packages on npm and drafts their GitHub releases. Nothing is public until the staged versions are approved (`pnpm stage approve`) and the drafts are published:",
+    "Merging this PR stages the following packages on npm.",
+    "Nothing is public until the staged versions are approved (`pnpm stage approve`), which also publishes their GitHub releases:",
     "",
-    ...plan.map(
+    ...releasePlan.map(
       ({ name, currentVersion, newVersion }) =>
         `- \`${name}\`: ${currentVersion} → ${newVersion}`,
     ),
@@ -95,14 +109,9 @@ async function run() {
     `It is updated automatically when new change intents land on \`${base}\`.`,
   ].join("\n");
 
-  await exec("git", ["add", "-A"]);
-  await exec("git", ["commit", "-m", title]);
-  /**
-   * The token goes into the remote URL only now, so `pnpm version` and the
-   * format command above never run while it's stored in .git/config. Silent, so
-   * the command line with the token isn't echoed to the log
-   */
-  await exec(
+  exec("git", ["add", "-A"]);
+  exec("git", ["commit", "-m", title]);
+  exec(
     "git",
     [
       "remote",
@@ -112,37 +121,35 @@ async function run() {
     ],
     { silent: true },
   );
-  await exec("git", ["push", "--force", "origin", branch]);
+  exec("git", ["push", "--force", "origin", branch]);
 
-  const { data: pulls } = await octokit.rest.pulls.list({
-    owner,
-    repo,
-    head: `${owner}:${branch}`,
-    base,
-    state: "open",
-  });
-
-  const [existing] = pulls;
+  const pullsPath = `/repos/${owner}/${repo}/pulls` as const;
+  const [existing] = await github.request(
+    {
+      method: "GET",
+      path: pullsPath,
+      searchParams: { head: `${owner}:${branch}`, base, state: "open" },
+    },
+    array(PullRequestSchema),
+  );
 
   if (existing) {
-    await octokit.rest.pulls.update({
-      owner,
-      repo,
-      pull_number: existing.number,
-      title,
-      body,
+    await github.request({
+      method: "PATCH",
+      path: `${pullsPath}/${existing.number}`,
+      body: { title, body },
     });
     info(`Updated release PR ${existing.html_url}`);
     setOutput("pr-number", existing.number);
   } else {
-    const { data: created } = await octokit.rest.pulls.create({
-      owner,
-      repo,
-      head: branch,
-      base,
-      title,
-      body,
-    });
+    const created = await github.request(
+      {
+        method: "POST",
+        path: pullsPath,
+        body: { head: branch, base, title, body },
+      },
+      PullRequestSchema,
+    );
     info(`Opened release PR ${created.html_url}`);
     setOutput("pr-number", created.number);
   }

@@ -1,8 +1,8 @@
 hoist: false
+minimumReleaseAgeExclude:
+  - "@smashercosmo/configs@0.2.0"
 saveExact: true
 
 versioning:
   changelog:
-    # Keep CHANGELOG.md committed; the release workflow builds GitHub release
-    # notes from it
     storage: repository

@@ -1,38 +1,20 @@
-import {
-  getInput,
-  getBooleanInput,
-  info,
-  warning,
-  setFailed,
-} from "@actions/core";
-import { getExecOutput } from "@actions/exec";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { z } from "zod";
 
-const WorkspacePackageSchema = z.object({
-  name: z.string(),
-  version: z.string().optional(),
-  path: z.string(),
-  private: z.boolean().default(false),
-});
+import {
+  getBooleanInput,
+  getInput,
+  info,
+  setFailed,
+  warning,
+} from "#shared/core.ts";
+import { findLastCommitChanging, hasTag } from "#shared/git.ts";
+import { createGitHubClient, getRepository } from "#shared/github.ts";
 
-const ReleaseSchema = z.object({
-  tag_name: z.string(),
-  html_url: z.url(),
-});
-
-type RequestOptions<TSchema extends z.ZodType> =
-  | Readonly<{ method: "GET"; endpoint: `/${string}`; schema: TSchema }>
-  | Readonly<{
-      method: "POST";
-      endpoint: `/${string}`;
-      schema: TSchema;
-      body: Readonly<Record<string, unknown>>;
-    }>;
-
-const RELEASES_PER_PAGE = 100;
+import { waitUntilPublished } from "./npm.ts";
+import { ReleaseSchema } from "./schemas.ts";
+import { listWorkspacePackages } from "./workspace.ts";
 
 function getEnv(name: string) {
   const value = process.env[name];
@@ -44,52 +26,11 @@ function getEnv(name: string) {
   return value;
 }
 
-/** Minimal GitHub REST API client for the current repository */
-function createGitHubClient(token: string) {
-  const apiUrl = process.env["GITHUB_API_URL"] ?? "https://api.github.com";
-  const repository = getEnv("GITHUB_REPOSITORY");
-
-  return async function request<TSchema extends z.ZodType>(
-    options: RequestOptions<TSchema>,
-  ): Promise<z.infer<TSchema>> {
-    const { method, endpoint, schema } = options;
-    const response = await fetch(`${apiUrl}/repos/${repository}${endpoint}`, {
-      method,
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${token}`,
-        "User-Agent": "create-github-release",
-        "X-GitHub-Api-Version": "2022-11-28",
-        ...(options.method === "POST"
-          ? { "Content-Type": "application/json" }
-          : {}),
-      },
-      ...(options.method === "POST"
-        ? { body: JSON.stringify(options.body) }
-        : {}),
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `GitHub API ${method} ${endpoint} failed with ${response.status}: ${await response.text()}`,
-      );
-    }
-
-    const result = schema.safeParse(await response.json());
-
-    if (!result.success) {
-      throw new Error(
-        `GitHub API ${method} ${endpoint} returned an unexpected response:\n${z.prettifyError(result.error)}`,
-      );
-    }
-
-    return result.data;
-  };
-}
-
 /**
- * Returns the section from "## <version>" (or "## [<version>] - <date>") up to
- * the next "## " heading
+ * Extracts the release notes for a specific version from CHANGELOG.md.
+ *
+ * Accepts headings like `## 1.2.0` and `## [1.2.0] - 2026-01-15`, then reads
+ * until the next version heading.
  */
 function getReleaseNotes(changelog: string, version: string) {
   const notes: string[] = [];
@@ -112,96 +53,72 @@ function getReleaseNotes(changelog: string, version: string) {
 }
 
 /**
- * Includes drafts, which, unlike published releases, may share a tag. The
- * get-release-by-tag endpoint doesn't return drafts, hence the full list. Pages
- * are fetched one after another, as the total count isn't known upfront
+ * Finds the commit that introduced the current package version. Because that
+ * version line still exists, the latest `git log -S` match is the addition we
+ * want to tag.
  */
-async function getExistingTags(
-  request: ReturnType<typeof createGitHubClient>,
-  page = 1,
-  tags: readonly string[] = [],
-): Promise<readonly string[]> {
-  const releases = await request({
-    method: "GET",
-    endpoint: `/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`,
-    schema: z.array(ReleaseSchema),
-  });
-  const collected = [...tags, ...releases.map((release) => release.tag_name)];
-
-  return releases.length < RELEASES_PER_PAGE
-    ? collected
-    : getExistingTags(request, page + 1, collected);
-}
-
-/**
- * The commit that set the package's current version: the last one that added or
- * removed the `"version": "<version>"` line of its package.json.
- *
- * That's the commit to tag. The commit the workflow runs on can be a later one,
- * e.g. when a failed release is retried by hand after more commits have landed
- * on main. Falls back to the workflow's commit when the history has no answer,
- * e.g. in a shallow clone.
- */
-async function getVersionCommit(
+function getVersionCommit(
   packagePath: string,
   version: string,
   fallback: string,
 ) {
-  const { stdout, exitCode } = await getExecOutput(
-    "git",
-    [
-      "log",
-      "-1",
-      "--format=%H",
-      `-S"version": "${version}"`,
-      "--",
+  try {
+    const commit = findLastCommitChanging(
+      `"version": "${version}"`,
       path.join(packagePath, "package.json"),
-    ],
-    { silent: true, ignoreReturnCode: true },
-  );
-  const commit = stdout.trim();
-
-  if (exitCode !== 0 || commit === "") {
-    warning(
-      `Couldn't find the commit that set version ${version}, tagging ${fallback} instead`,
     );
-    return fallback;
+
+    if (commit !== undefined) {
+      return commit;
+    }
+  } catch {
+    /** The warning below explains the fallback when history search fails. */
   }
 
-  return commit;
+  warning(
+    `Couldn't find the commit that set version ${version}, tagging ${fallback} instead`,
+  );
+
+  return fallback;
+}
+
+/** Reads how long to wait for a version to appear on npm. */
+function getWaitMinutes() {
+  const input = getInput("npm-wait-minutes");
+  const minutes = Number(input);
+
+  if (!Number.isFinite(minutes) || minutes < 0) {
+    throw new Error(
+      `npm-wait-minutes has to be a number of minutes, 0 or more, got "${input}"`,
+    );
+  }
+
+  return minutes;
 }
 
 try {
   const token = getInput("token", { required: true });
-  const draft = getBooleanInput("draft");
   const includePrivate = getBooleanInput("include-private");
+  const npm = getBooleanInput("npm");
+  const deadline = Date.now() + getWaitMinutes() * 60_000;
   const sha = getEnv("GITHUB_SHA");
 
-  const { stdout: workspacePackagesOutput } = await getExecOutput(
-    "pnpm",
-    ["ls", "-r", "--depth", "-1", "--json"],
-    { silent: true },
-  );
-  const workspacePackages = z
-    .array(WorkspacePackageSchema)
-    .parse(JSON.parse(workspacePackagesOutput));
+  const workspacePackages = listWorkspacePackages();
 
   /**
-   * Packages without a version are never released, e.g. the root of a
-   * workspace. Private ones only when asked for: they aren't published to npm,
-   * but a repository can still be versioned and tagged
+   * Releasable packages need a version. Private packages are opt-in because
+   * they are tagged on GitHub but never waited for on npm.
    */
   const releasablePackages = workspacePackages.flatMap(
-    ({ name, version, path: packagePath, private: isPrivate }) =>
+    ({ name, version, path: packagePath, private: isPrivate = false }) =>
       version === undefined || (isPrivate && !includePrivate)
         ? []
-        : [{ name, version, packagePath }],
+        : [{ name, version, packagePath, isPrivate }],
   );
 
   /**
-   * Tags are "v<version>", which is only unique with one released package. More
-   * packages need "<name>@<version>" tags, which would break the existing tag
-   * history, so fail instead of creating clashing tags
+   * Existing releases use `v<version>` tags. That format is ambiguous for
+   * multi-package releases, so fail instead of inventing a second tag scheme.
    */
   if (releasablePackages.length > 1) {
     throw new Error(
@@ -209,56 +126,70 @@ try {
     );
   }
 
-  const request = createGitHubClient(token);
-
-  const existingTags = new Set(await getExistingTags(request));
-
-  const packagesToRelease = releasablePackages.flatMap(
-    ({ name, version, packagePath }) => {
-      const tag = `v${version}`;
-
-      if (existingTags.has(tag)) {
-        info(`Release ${tag} already exists, skipping`);
-        return [];
-      }
-
-      return [{ name, version, packagePath, tag }];
-    },
-  );
+  const { owner, repo } = getRepository();
+  const github = createGitHubClient({
+    token,
+    userAgent: "create-github-release",
+  });
 
   await Promise.all(
-    packagesToRelease.map(async ({ name, version, packagePath, tag }) => {
-      let notes = getReleaseNotes(
-        fs.readFileSync(path.join(packagePath, "CHANGELOG.md"), "utf8"),
-        version,
-      );
+    releasablePackages.map(
+      async ({ name, version, packagePath, isPrivate }) => {
+        const tag = `v${version}`;
 
-      if (notes === "") {
-        warning(`No CHANGELOG.md section found for ${name}@${version}`);
-        notes = `Release ${name}@${version}`;
-      }
+        /**
+         * Creating a release also creates its tag, so the tag is the
+         * idempotency check for reruns and ordinary pushes.
+         */
+        if (hasTag(tag)) {
+          info(`Release ${tag} already exists, skipping`);
+          return;
+        }
 
-      const commit = await getVersionCommit(packagePath, version, sha);
+        /**
+         * Public staged versions become releasable only after npm approval.
+         * Later workflow runs will create the GitHub release once npm has it.
+         */
+        if (npm && !isPrivate) {
+          const published = await waitUntilPublished(name, version, deadline);
 
-      /**
-       * Creates the tag as well, pointing to the released commit. For a draft,
-       * the tag is created once the draft is published
-       */
-      const release = await request({
-        method: "POST",
-        endpoint: "/releases",
-        schema: ReleaseSchema,
-        body: {
-          tag_name: tag,
-          target_commitish: commit,
-          name: tag,
-          body: notes,
-          draft,
-        },
-      });
+          if (!published) {
+            warning(
+              `${name}@${version} isn't on npm yet, so its release ${tag} isn't created. If it's staged, approve it with \`pnpm stage approve\`. The next run of the release workflow creates the release once it's on npm`,
+            );
+            return;
+          }
+        }
 
-      info(`Created ${draft ? "draft " : ""}release ${release.html_url}`);
-    }),
+        let notes = getReleaseNotes(
+          fs.readFileSync(path.join(packagePath, "CHANGELOG.md"), "utf8"),
+          version,
+        );
+
+        if (notes === "") {
+          warning(`No CHANGELOG.md section found for ${name}@${version}`);
+          notes = `Release ${name}@${version}`;
+        }
+
+        const commit = getVersionCommit(packagePath, version, sha);
+
+        const release = await github.request(
+          {
+            method: "POST",
+            path: `/repos/${owner}/${repo}/releases`,
+            body: {
+              tag_name: tag,
+              target_commitish: commit,
+              name: tag,
+              body: notes,
+            },
+          },
+          ReleaseSchema,
+        );
+
+        info(`Created release ${release.html_url}`);
+      },
+    ),
   );
 } catch (error) {
   setFailed(error instanceof Error ? error.message : String(error));

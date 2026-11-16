@@ -1,14 +1,12 @@
 version: 2
 
 updates:
-  # The actions in the workflows are pinned to commit hashes, which nothing
-  # else keeps up to date. All updates come in one weekly pull request
+  # Keep pinned workflow action SHAs current in one weekly PR.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    # A release has to be out for a week before it's proposed, so one that
-    # turns out to be broken or malicious is likely to be pulled first
+    # Wait a week so broken or malicious action releases can be pulled first.
     cooldown:
       default-days: 7
     groups:

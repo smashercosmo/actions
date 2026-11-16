@@ -1,0 +1,14 @@
+name: Plan Release
+description:
+  Decides what the release workflow should do. Opens or updates the release PR
+  when change intents are pending, publishes after the release ledger changes,
+  and retries publishing on `workflow_dispatch`. Requires a checkout with full
+  history. Intended for internal use by `release.yml`.
+
+outputs:
+  action:
+    description: "Planned action: `pr`, `release`, or `none`."
+
+runs:
+  using: node24
+  main: index.ts

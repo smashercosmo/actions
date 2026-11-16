@@ -1,24 +1,17 @@
 name: Release
 
-# Reusable release workflow for pnpm workspaces that record their changes as
-# change intents (`pnpm change`). A project calls it from its own release
-# workflow on every push to main, which then does one of the following:
-# - pending change intents in .changeset/ → apply them with `pnpm version -r`
-#   and open (or update) a release PR with the bumped versions and changelogs.
-#   Intents that decline a release (`pnpm change --bump none`) don't open one:
-#   they stay in .changeset/ until the next release PR removes them
-# - the release PR was just merged (.changeset/ledger.yaml changed) → with
-#   `npm`, run CI on the commit and stage every package whose version isn't on
-#   npm yet. Then create a draft GitHub release from the CHANGELOG.md section
-#   of the new version. Staged versions are approved with `pnpm stage approve`
-#   (2FA), and publishing a draft creates its tag
-# - otherwise → nothing
-# Running the calling workflow manually (workflow_dispatch) without pending
-# intents always takes the release path, e.g. to retry a failed release. See
-# the README for how to call it
+# Reusable release workflow for pnpm workspaces. On each push it decides whether to:
 #
-# Every job gets only the access it needs, so dependency code running during
-# install or build never shares a job with both npm and GitHub write access
+# - Open or update a release PR when packages need version updates.
+# - Stage packages on npm after a release PR merge, when `npm` is enabled.
+# - Do nothing when no release work is pending.
+#
+# Every run also tries to create missing GitHub releases. With `npm` enabled,
+# public package releases wait until the version is approved and visible on npm.
+#
+# Require release PR branches to be up to date before merging, so newer change
+# intents cannot be skipped by an older release PR.
+#
 on:
   workflow_call:
     inputs:
@@ -27,21 +20,21 @@ on:
         type: string
         required: true
       npm:
-        description: Stage the packages on npm, after running CI on the commit about to be published
+        description: Stage packages on npm after running CI on the commit to be released
         type: boolean
         default: false
       include-private:
-        description: Also create GitHub releases for private packages that have a version, e.g. for a repository that is versioned and tagged but never published to npm
-        type: boolean
-        default: false
-      cache:
-        description: Cache the pnpm store between runs. Passed on to CI, together with `playwright-browsers`
+        description: Also create GitHub releases for versioned private packages, e.g. packages that are tagged but not published to npm
         type: boolean
         default: false
       playwright-browsers:
-        description: Playwright browsers CI installs before the tests. Only used with `npm`
+        description: Playwright browsers to install before CI tests. Only used when `npm` is enabled
         type: string
         default: ""
+      npm-approval-timeout:
+        description: Minutes to wait, after staging, for the staged versions to be approved on npm before giving up. At most 20. Only used when `npm` is enabled
+        type: number
+        default: 10
     secrets:
       app-private-key:
         description: Private key of the GitHub App that opens the release PR
@@ -49,11 +42,11 @@ on:
 
 permissions: {}
 
-# No concurrency group for the whole workflow, on purpose. Runs in a group wait
-# for each other, and GitHub cancels a waiting run when a newer one arrives. A
-# quick push right after merging the release PR would cancel the run that was
-# about to release, before it even decided what to do. So every push gets its
-# own `plan`, and only the jobs that must not overlap share a group
+# Queue release workflows instead of cancelling them; the run started by merging
+# a release PR must survive long enough to stage and release that version.
+concurrency:
+  group: release-${{ github.workflow }}
+  queue: max
 
 jobs:
   plan:
@@ -67,34 +60,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Full history, so the plan step can compare HEAD with the commit
-          # main pointed to before the push
           fetch-depth: 0
 
-      # A push can contain several commits, e.g. a rebase-merge, and the
-      # ledger may have changed in any of them. So the whole push is compared
-      # (BEFORE..HEAD), not just the last commit. BEFORE is missing from the
-      # history after a force-push and is all zeros for a new branch: then the
-      # last commit is compared, as a fallback
       - id: plan
         name: Decide what to do
-        env:
-          BEFORE: ${{ github.event.before }}
-        run: |
-          if ! git cat-file -e "${BEFORE:-missing}^{commit}" 2>/dev/null; then
-            BEFORE=HEAD^
-          fi
+        uses: $/plan-release
 
-          if find .changeset -maxdepth 1 -name '*.md' ! -name README.md 2>/dev/null | grep -q .; then
-            echo "action=pr" >> "$GITHUB_OUTPUT"
-          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || ! git diff --quiet "$BEFORE" HEAD -- .changeset/ledger.yaml; then
-            echo "action=release" >> "$GITHUB_OUTPUT"
-          else
-            echo "action=none" >> "$GITHUB_OUTPUT"
-          fi
-
-  # Pushes the release branch and opens the PR with the GitHub App token, so
-  # the PR triggers other workflows (GITHUB_TOKEN-created ones don't)
   release-pr:
     needs: plan
     if: needs.plan.outputs.action == 'pr'
@@ -102,33 +73,21 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-    # The `release` environment of the calling repository, with the private
-    # key of the GitHub App. The calling job can't set an environment itself
     environment: release
-    # One at a time, as they force-push the same branch. A waiting run that
-    # gets cancelled by a newer one is fine here: the newer one opens the PR
-    concurrency:
-      group: release-pr
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The tip of the branch, not the commit that triggered the run: runs
-          # can start out of order, and the PR must be built from the latest
-          # main, or an older run would overwrite a newer PR
+          # Use the branch tip after this run reaches the queue. An older push
+          # SHA can still contain intents already consumed by a merged release
+          # PR, which would open a duplicate release PR. Up-to-date branch
+          # protection would stop that PR from merging; this avoids creating it.
           ref: ${{ github.ref }}
 
-      # Installs pnpm from "packageManager" and Node from "devEngines.runtime"
-      # in package.json, then runs `pnpm install --frozen-lockfile`: the
-      # release PR action runs `pnpm version` and `pnpm format`
       - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
-          cache: ${{ inputs.cache }}
           require-lockfile: true
 
-      # `$/` is this repository at the commit of this workflow, the one the
-      # caller pinned, not the repository of the caller
       - id: app-token
         uses: $/create-token
         with:
@@ -142,14 +101,10 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           app-slug: ${{ steps.app-token.outputs.app-slug }}
-          # The changed files are appended, so it formats only those
           format-command: pnpm format
 
-  # The same checks as CI, on the exact commit that is about to be published.
-  # A separate job with read access only: it runs dependency code (build tools,
-  # browsers), which must not share a job with the right to publish to npm.
-  # Without `npm` nothing is published, so the checks don't run again: the
-  # release PR had to pass CI to be merged, and the draft is published by hand
+  # Recheck the exact commit that will be published, without npm credentials in
+  # the same job as build/test dependency code.
   verify:
     needs: plan
     if: needs.plan.outputs.action == 'release' && inputs.npm
@@ -157,7 +112,6 @@ jobs:
       contents: read
     uses: $/.github/workflows/ci.yml
     with:
-      cache: ${{ inputs.cache }}
       playwright-browsers: ${{ inputs.playwright-browsers }}
 
   publish:
@@ -167,14 +121,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      # npm trusted publishing (OIDC); pnpm adds provenance automatically. npm
-      # checks the calling workflow's filename, not this one's
       id-token: write
     environment: release
-    # Two releases never publish at the same time
-    concurrency:
-      group: release-publish
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -182,51 +130,43 @@ jobs:
 
       - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
-          cache: ${{ inputs.cache }}
           require-lockfile: true
 
-      # Only the publishable packages, so no app build tooling runs in a job
-      # that can publish to npm
       - name: Build packages
         run: pnpm --filter "./packages/*" build
 
-      # Uploads to npm's staging area instead of the live registry. Skips
-      # private packages and versions already on the registry
       - name: Stage packages on npm
         run: pnpm stage publish -r
 
-  # Waits for publish, so drafts are only created for staged versions, and
-  # runs when verify and publish were skipped because of `npm: false`. Draft
-  # releases don't need to trigger other workflows, so GITHUB_TOKEN is enough
+  # Create any missing GitHub release for the current version. This still runs
+  # after skipped or failed publish jobs; with `npm`, the action releases only
+  # versions already visible on npm.
+  #
+  # The merge run waits for npm approval and holds the release queue. Later runs
+  # check once, which catches approvals that happened after the merge run gave up.
   release:
     needs: [plan, verify, publish]
-    if: needs.plan.outputs.action == 'release' && !cancelled() && !contains(needs.*.result, 'failure')
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # `npm-approval-timeout` is capped at 20 minutes.
+    timeout-minutes: 30
     permissions:
       contents: write
-    # Two runs never create drafts at the same time, or both would create one
-    # for the same version
-    concurrency:
-      group: release-draft
-      cancel-in-progress: false
     steps:
+      # Full history finds the version commit; tags make release creation idempotent.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Full history: the action looks up the commit that set each
-          # package's version, to tag that one
           fetch-depth: 0
 
-      # The action lists the workspace packages with `pnpm ls -r`
       - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
-          cache: ${{ inputs.cache }}
           require-lockfile: true
 
-      - name: Create draft GitHub releases
+      - name: Create GitHub releases
         uses: $/create-github-release
         with:
           token: ${{ github.token }}
-          draft: true
           include-private: ${{ inputs.include-private }}
+          npm: ${{ inputs.npm }}
+          npm-wait-minutes: ${{ needs.publish.result == 'success' && inputs.npm-approval-timeout || 0 }}

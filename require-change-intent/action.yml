@@ -1,6 +1,10 @@
 name: Require Change Intent
-description: GitHub Action for failing a pull request that doesn't add a change intent to `.changeset/` (`pnpm change`, or `pnpm change --bump none` for a change that needs no release). The release PR, the only pull request that changes `.changeset/ledger.yaml`, passes without one. Needs the merge commit of the pull request checked out with a fetch depth of 2
+description:
+  Fails pull requests that do not add a `.changeset/` intent (`pnpm change`, or
+  `pnpm change --bump none` for changes that need no release). The release PR is
+  exempt unless the base branch has new intents it has not applied yet. Requires
+  the pull request merge commit checked out with `fetch-depth` set to 2.
 
 runs:
   using: node24
-  main: dist/index.js
+  main: index.ts
