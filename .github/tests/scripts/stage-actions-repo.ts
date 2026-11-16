@@ -2,30 +2,25 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ACTIONS_REF, ACTIONS_REPOSITORY } from "./actrc";
-import { git } from "./exec";
+import { ACTIONS_REF, ACTIONS_REPOSITORY } from "./actrc.ts";
+import { git } from "./exec.ts";
 
-/** Root directory of this repository (three levels up from this script). */
+/** Root of this actions repository. */
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 
 /**
- * Matches internal workflow actions referenced via `uses: $/<path>`. Captures
- * `uses:` and whitespace to preserve formatting, and `path` to rewrite the
- * action target.
+ * Internal action reference (`uses: $/<path>`) that GitHub resolves relative to
+ * the reusable workflow repository.
  */
 const SELF_REFERENCE = /(?<uses>\buses:\s*)\$\/(?<path>\S+)/gv;
 
 /**
- * Matches the `queue` key of a concurrency group. act doesn't know the key yet
- * and rejects the whole workflow because of it (nektos/act#6095). It ignores
- * concurrency groups anyway, so the staged copy can do without the line.
+ * Act rejects the newer `queue` concurrency key and ignores concurrency groups,
+ * so workflow tests can safely remove it from the staged copy.
  */
 const CONCURRENCY_QUEUE = /^[\t ]*queue:[\t ]*(?:max|single)[\t ]*\n/gmv;
 
-/**
- * Recursively discovers all YAML workflow and action manifest files in a
- * directory.
- */
+/** Lists workflow and action YAML files under `dir`. */
 function listYamlFiles(dir: string) {
   return fs
     .readdirSync(dir, { recursive: true, encoding: "utf8" })
@@ -34,28 +29,20 @@ function listYamlFiles(dir: string) {
 }
 
 /**
- * Copies unignored working tree files to a temporary directory and rewrites
- * `$/<path>` action references to explicit repository refs
- * (`smashercosmo/actions/<path>@local`).
+ * Stages the current working tree for act, including uncommitted changes.
  *
- * GitHub Actions resolves `$/` to the repository containing the reusable
- * workflow. However, act does not natively support `$/` syntax. By rewriting
- * `$/` to a pinned ref and mapping that ref via act's `--local-repository`
- * flag, act resolves action steps to the local staged directory.
- *
- * Files are copied directly from the working tree rather than git commits so
- * tests can validate uncommitted local modifications.
+ * GitHub supports `uses: $/<path>` in reusable workflows; act does not. Rewrite
+ * those references to an explicit local repository ref that act can map with
+ * `--local-repository`.
  */
 function copyWorkingTree() {
-  /** Resolves symlinks in `os.tmpdir()` (common on macOS). */
+  /** Resolve macOS tmpdir symlinks so Docker sees the same paths. */
   const tmpDir = fs.realpathSync(os.tmpdir());
   const dir = fs.mkdtempSync(path.join(tmpDir, "act-actions-"));
 
   /**
-   * Queries git for tracked files (`--cached`) and untracked unignored files
-   * (`--others --exclude-standard`). Delimited by NUL (`-z`) to safely handle
-   * arbitrary paths. Excludes `.github/tests/` because workflows do not depend
-   * on test files.
+   * Copy tracked files plus untracked unignored files. NUL delimiters preserve
+   * unusual paths.
    */
   const files = git(REPO_ROOT, [
     "ls-files",
@@ -70,7 +57,7 @@ function copyWorkingTree() {
   for (const file of files) {
     const source = path.join(REPO_ROOT, file);
 
-    /** Skips deleted files that still linger in the git staging index. */
+    /** Skip deleted files that still appear in the index. */
     if (fs.existsSync(source)) {
       const target = path.join(dir, file);
       fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -78,10 +65,7 @@ function copyWorkingTree() {
     }
   }
 
-  /**
-   * Rewrites `$/` self-references and removes the `queue` key of concurrency
-   * groups within workflow and action YAML files in the staged copy only.
-   */
+  /** Rewrite only the staged copy, never the developer working tree. */
   for (const file of listYamlFiles(dir)) {
     const content = fs.readFileSync(file, "utf8");
     fs.writeFileSync(
@@ -99,19 +83,14 @@ function copyWorkingTree() {
 }
 
 /**
- * Prepares the local actions repository for act test runs.
- *
- * Returns the temporary directory path and the `--local-repository` argument
- * mapping `<owner>/<repo>@<ref>=<path>` so act routes action calls to the
- * staged files. Third-party actions are cached separately by act (see
- * `getAdditionalArgs` in `actrc.ts`).
+ * Returns the staged repo plus the act mapping that routes this repo's action
+ * calls to it.
  */
 function stageActionsRepo() {
   const dir = copyWorkingTree();
 
   return {
     dir,
-    /** Act `--local-repository` option format: `<owner>/<repo>@<ref>=<folder>`. */
     localRepositories: [`${ACTIONS_REPOSITORY}@${ACTIONS_REF}=${dir}`],
   };
 }

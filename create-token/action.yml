@@ -1,25 +1,25 @@
 name: Create GitHub App Token
-description: GitHub Action for creating a GitHub App installation access token
+description: Creates a repository-scoped GitHub App installation access token.
 
 inputs:
   client-id:
-    description: GitHub App client ID
+    description: GitHub App client ID.
     required: true
   private-key:
-    description: GitHub App private key
+    description: GitHub App private key in PEM format.
     required: true
   permission-pull-requests:
-    description: The level of permission to grant the access token for pull requests and related comments, assignees, labels, milestones, and merges. Can be set to 'read' or 'write'.
+    description: Pull request permission for the token. Use `read` or `write`.
   permission-contents:
-    description: The level of permission to grant the access token for repository contents, commits, branches, downloads, releases, and merges. Can be set to 'read' or 'write'.
+    description: Repository contents permission for the token. Use `read` or `write`.
 
 outputs:
   token:
-    description: GitHub installation access token
+    description: GitHub App installation access token.
   app-slug:
-    description: GitHub App slug
+    description: GitHub App slug.
 
 runs:
   using: node24
-  main: dist/index.js
-  post: dist/post.js
+  main: index.ts
+  post: post.ts

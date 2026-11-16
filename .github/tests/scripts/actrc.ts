@@ -1,113 +1,54 @@
 import { generateKeyPairSync } from "node:crypto";
 
 /**
- * One central place for all configuration settings used by `act` during tests.
- *
- * Running GitHub Actions locally with `act` requires fake repositories, mock
- * tokens, simulated GitHub App credentials, command-line arguments, and
- * environment variables. This file defines all those values so test files and
- * mock servers stay in sync without duplicating constants everywhere.
+ * Shared `act` test configuration: fake repositories, tokens, GitHub App
+ * identity, runner flags, and environment variables.
  */
 
 /**
- * The Docker container image that acts as the fake GitHub runner machine.
- *
- * This specific image comes pre-installed with the exact tools our GitHub
- * Actions need to run, including Node 24, git, and jq.
+ * Runner image with the tools these workflows expect, including Node 24, git,
+ * and jq.
  */
 const ACT_IMAGE = "catthehacker/ubuntu:act-latest";
 
-/**
- * The repository name of this actions library (`smashercosmo/actions`).
- *
- * In tests, fake workflow files use this name when writing `uses:
- * smashercosmo/actions/...` steps.
- */
 const ACTIONS_REPOSITORY = "smashercosmo/actions";
-
-/**
- * The version tag used in test workflows (e.g. `uses:
- * smashercosmo/actions/...@local`).
- *
- * Normally in real workflows, people pin a version like `@v1` or a commit SHA.
- * But in our tests, we use `@local` so `act` knows to run the action code
- * directly from our local computer instead of trying to download it from
- * GitHub.
- */
 const ACTIONS_REF = "local";
 
-/**
- * Information about the fake repository used for testing ("consumer").
- *
- * We simulate a real project that uses our GitHub Actions, located in
- * `fixtures/consumer`.
- */
 const CONSUMER_OWNER = "acme";
 const CONSUMER_REPO = "consumer";
 const CONSUMER_REPOSITORY = `${CONSUMER_OWNER}/${CONSUMER_REPO}`;
 /**
- * The fake GitHub URL for our test consumer repository.
- *
- * Git commands in our actions will try to connect to this URL, but we secretly
- * redirect all network traffic to a local folder on your computer so tests
- * never touch the real github.com (see `getEnv` and
- * `create-mock-git-repo.ts`).
+ * Canonical URL used by actions under test. Git rewrites it to the local bare
+ * repository in `getEnv`, so tests never push to github.com.
  */
 const CONSUMER_URL = `https://github.com/${CONSUMER_REPOSITORY}`;
 
-/**
- * The npm package inside our fake repository that we use to test version bumps
- * and package publishing.
- */
 const CONSUMER_PACKAGE = "acme-lib";
 const CONSUMER_PACKAGE_DIR = "packages/lib";
 
 const MAIN_BRANCH_NAME = "main";
-/**
- * The branch name used when pretending a developer opened a feature pull
- * request in tests.
- */
 const FEATURE_BRANCH_NAME = "feature";
-/**
- * The dedicated branch where the release action commits version bumps and
- * changelog updates before merging them into main.
- */
 const RELEASE_BRANCH_NAME = "release";
 
 /**
- * Fake credentials for a simulated GitHub App bot.
- *
- * In real life, an automated GitHub App needs an ID, name slug, and user ID to
- * make commits and open pull requests on your behalf (formatted as
- * `<id>+<slug>[bot]@users.noreply.github.com`). We hardcode fake values here so
- * our tests can check that the bot's identity and commits look right.
+ * Fake GitHub App identity used to verify bot-authored commits and elevated
+ * release PR permissions.
  */
 const RELEASE_BOT_CLIENT_ID = "Iv23liMockClientId00";
 const RELEASE_BOT_SLUG = "release-bot";
 const RELEASE_BOT_USER_ID = 12_345_678;
 const RELEASE_BOT_INSTALLATION_ID = 87_654_321;
 
-/**
- * The fake default `GITHUB_TOKEN` automatically provided by GitHub Actions to
- * every workflow job.
- */
 const GITHUB_TOKEN = "ghs_mockGithubToken";
 /**
- * A separate fake token representing the elevated permissions of our GitHub
- * App.
- *
- * We give this token a different string than `GITHUB_TOKEN` so our tests can
- * easily verify whether an action used the basic workflow token or correctly
- * switched to the GitHub App token for privileged operations.
+ * Keep this distinct from `GITHUB_TOKEN` so tests can assert which credential a
+ * workflow used.
  */
 const INSTALLATION_TOKEN = "ghs_mockInstallationToken";
 
 /**
- * A temporary RSA private key generated on the fly for each test run.
- *
- * GitHub Apps must authenticate by creating a signed token (JWT) using a
- * private key. We generate a real RSA key pair here so the `create-token`
- * action produces properly formatted JWT tokens without failing syntax checks.
+ * Use a real key so `create-token` exercises JWT signing, not only string
+ * plumbing.
  */
 const RELEASE_BOT_PRIVATE_KEY = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -116,21 +57,12 @@ const RELEASE_BOT_PRIVATE_KEY = generateKeyPairSync("rsa", {
 }).privateKey;
 
 /**
- * Public GitHub Actions from the community that our workflows use (like
- * `actions/checkout`).
- *
- * We list them here so `act` knows to download them publicly without attaching
- * our fake test tokens, which GitHub's real servers would reject.
+ * Public actions must be fetched from github.com without the fake
+ * token we use in tests.
  */
 const THIRD_PARTY_ACTIONS = ["actions/checkout", "pnpm/setup"];
 
-/**
- * Builds the list of command-line flags passed to `act` when running a test.
- *
- * Each flag is wrapped in a small array `[flag, value?]` so we can write a
- * comment above each one explaining why it is needed, before flattening them
- * all into one list.
- */
+/** Builds the `act` flags that connect workflow containers to local fixtures. */
 function getAdditionalArgs({
   localRepoDir,
   remoteDir,
@@ -143,82 +75,42 @@ function getAdditionalArgs({
   localRepositories: readonly string[];
 }) {
   return [
-    /**
-     * Tells `act` to run any job labeled `runs-on: ubuntu-latest` inside our
-     * local Docker image rather than downloading huge official GitHub images.
-     */
     ["-P", `ubuntu-latest=${ACT_IMAGE}`],
-    /**
-     * Prevents `act` from trying to re-download the Docker image from Docker
-     * Hub before every single test run if we already have it locally.
-     */
+    /** Reuse the local image when it is already present. */
     ["--pull=false"],
     /**
-     * Forces `act` to actually run the `actions/checkout` step using git.
-     *
-     * By default, `act` takes a shortcut and just copies files directly from
-     * your disk, skipping git checkout entirely. But we need real git checkouts
-     * to test how GitHub creates and checks out pull request merge commits.
+     * Run real checkout steps instead of `act`'s file-copy shortcut, because PR
+     * merge commits and parent history are part of the behavior under test.
      */
     ["--no-skip-checkout"],
-    /**
-     * Tells `act` to reuse previously downloaded actions from its local cache
-     * if downloading them fails, allowing tests to run reliably even with flaky
-     * internet.
-     */
+    /** Let cached actions keep tests usable when the network is unavailable. */
     ["--action-offline-mode"],
     /**
-     * Tells `act` to clone public community actions directly from github.com
-     * without sending our fake `GITHUB_TOKEN`, preventing GitHub from rejecting
-     * the request with an authentication error.
+     * Public actions should be downloaded from github.com, not the mocked
+     * host configured for the consumer repository.
      */
     ...THIRD_PARTY_ACTIONS.map((repository) => [
       "--replace-ghe-action-with-github-com",
       repository,
     ]),
-    /**
-     * Disables `act`'s built-in caching server since our tests run in isolation
-     * and do not use cached dependencies.
-     */
+    /** The isolated test repositories do not share dependency caches. */
     ["--no-cache-server"],
-    /**
-     * Points `act` to the directory containing our fake consumer repository on
-     * disk.
-     */
     ["--directory", localRepoDir],
-    /** Docker settings applied to every workflow container that `act` spins up. */
     [
       "--container-options",
       [
         /**
-         * Shares the fake bare git repository folder on your computer with the
-         * Docker container at the exact same file path, so git commands inside
-         * Docker find it where they expect.
+         * Mount the fake remote repository at the same path inside Docker so
+         * rewritten Git URLs resolve there.
          */
         `-v ${remoteDir}:${remoteDir}`,
-        /**
-         * Mounts our test `.npmrc` file directly into `/root/.npmrc` inside the
-         * container. This gives `pnpm` the authorization token it needs to talk
-         * to our fake Verdaccio package registry.
-         */
+        /** Give in-container pnpm the token for the mock Verdaccio registry. */
         `-v ${npmrcFile}:/root/.npmrc`,
-        /**
-         * Maps the name `host.docker.internal` to the host computer running the
-         * test.
-         *
-         * On Linux, Docker containers cannot talk to services running on the
-         * host machine unless this flag is passed. Without it, the
-         * containerized action cannot connect to our mock GitHub server or mock
-         * npm registry.
-         */
+        /** Let Linux containers reach mock services running on the host. */
         "--add-host=host.docker.internal:host-gateway",
       ].join(" "),
     ],
-    /**
-     * Tells `act` that whenever a workflow step says `uses:
-     * smashercosmo/actions/...@local`, it should look inside our locally staged
-     * folder instead of looking on the internet (see `stage-actions-repo.ts`).
-     */
+    /** Resolve `smashercosmo/actions/...@local` to staged local action copies. */
     ...localRepositories.map((localRepository) => [
       "--local-repository",
       localRepository,
@@ -227,10 +119,8 @@ function getAdditionalArgs({
 }
 
 /**
- * Environment variables given to the Docker runner container.
- *
- * These variables trick git, Octokit, and pnpm into talking to our local test
- * servers instead of real external servers on the internet.
+ * Environment passed into workflow containers so Git, GitHub API calls, and
+ * pnpm all use local test services.
  */
 function getEnv({
   remoteDir,
@@ -242,13 +132,8 @@ function getEnv({
   registryPort: number;
 }) {
   /**
-   * Git configuration rules sent to the container:
-   *
-   * 1. Whenever git tries to connect to `https://github.com/acme/consumer`,
-   *    redirect it locally to our bare git repository folder instead.
-   * 2. Mark all directories as "safe" so git does not complain about file
-   *    ownership differences between your host user and the container's root
-   *    user.
+   * Redirect the consumer repository URL to the local bare repository and trust
+   * host-owned files that Docker accesses as root.
    */
   const gitConfig = [
     [`url.${remoteDir}/${CONSUMER_REPO}.insteadOf`, CONSUMER_URL],
@@ -267,10 +152,8 @@ function getEnv({
   return {
     values: {
       /**
-       * Git lets you define configuration rules via environment variables
-       * instead of writing a `.gitconfig` file. `GIT_CONFIG_COUNT` tells git
-       * how many key/value pairs to read (`GIT_CONFIG_KEY_0`,
-       * `GIT_CONFIG_VALUE_0`, etc.).
+       * Git reads config from numbered env pairs, avoiding a generated
+       * `.gitconfig` file inside the container.
        */
       GIT_CONFIG_COUNT: String(gitConfig.length),
       ...Object.fromEntries(
@@ -279,37 +162,22 @@ function getEnv({
           [`GIT_CONFIG_VALUE_${index}`, value],
         ]),
       ),
-      /**
-       * Tells GitHub tools (like Octokit and the `gh` CLI) to send all API
-       * requests to our fake GitHub server running on the host machine.
-       */
+      /** Route GitHub REST calls to the mock server on the host. */
       GITHUB_API_URL: `http://host.docker.internal:${githubApiPort}`,
-      /** The same for GraphQL requests, see `create-github-release` */
-      GITHUB_GRAPHQL_URL: `http://host.docker.internal:${githubApiPort}/graphql`,
-      /**
-       * Tells GitHub Actions which repository it is supposed to be operating on
-       * (`acme/consumer`).
-       */
       GITHUB_REPOSITORY: CONSUMER_REPOSITORY,
-      /**
-       * Tells `pnpm` inside Docker to download and publish packages from our
-       * fake local Verdaccio registry instead of npmjs.org.
-       */
+      /** Route package installs and publishes to the mock registry. */
       pnpm_config_registry: `http://host.docker.internal:${registryPort}/`,
     },
   };
 }
 
-/**
- * Secret tokens available to workflow steps via `${{ secrets.NAME }}` or `${{
- * github.token }}`.
- */
+/** Secrets exposed to workflow expressions during `act` runs. */
 function getSecrets() {
   return {
     values: {
       /**
-       * Forces `act` to use our fake test token instead of accidentally picking
-       * up your real personal GitHub CLI login from your computer.
+       * Prevent `act` from falling back to a real GitHub credential from the
+       * developer machine.
        */
       GITHUB_TOKEN,
       RELEASE_BOT_PRIVATE_KEY,
@@ -317,7 +185,7 @@ function getSecrets() {
   };
 }
 
-/** Repository variables available to workflow steps via `${{ vars.NAME }}`. */
+/** Repository variables exposed to workflow expressions. */
 function getVariables() {
   return {
     values: {

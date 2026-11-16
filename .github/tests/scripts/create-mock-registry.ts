@@ -1,3 +1,5 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+
 import { once } from "node:events";
 import fs from "node:fs";
 import { Server } from "node:http";
@@ -6,26 +8,18 @@ import path from "node:path";
 import { runServer } from "verdaccio";
 import { z } from "zod";
 
-/**
- * Dedicated publisher user created on the mock registry for authenticated
- * publish operations.
- */
+/** Registry account used for authenticated publishes. */
 const USER = "publisher";
 
-/**
- * Validation schemas for Verdaccio API responses. Enforces expected shapes when
- * reading package metadata and staged versions.
- */
-
-/** Schema for user creation response containing the authentication token. */
+/** User creation response containing the npm auth token. */
 const UserSchema = z.object({ token: z.string() });
 
-/** Schema for an npm packument document containing metadata and version records. */
+/** Packument fields the tests read. */
 const PackumentSchema = z.object({
   versions: z.record(z.string(), z.unknown()),
 });
 
-/** Schema for an individual staged package version. */
+/** Staged package fields the tests read. */
 const StagedItemSchema = z.object({
   id: z.string(),
   packageName: z.string(),
@@ -35,45 +29,26 @@ const StagedItemSchema = z.object({
 const StagedSchema = z.object({ items: z.array(StagedItemSchema) });
 
 /**
- * Starts an isolated in-process Verdaccio npm registry for package publish and
- * install tests.
+ * Starts an isolated Verdaccio registry with npm staging enabled.
  *
- * Runs without upstream fallbacks, ensuring packages can only be resolved if
- * published during the test.
- *
- * Package staging (`flags: { stage: true }`) is enabled to test `pnpm stage
- * publish`, which uploads releases to a staging area for review before public
- * release. Staged packages are inspected via `getStagedVersions()` rather than
- * `getVersions()`.
+ * There are no upstream fallbacks, so every installed package must have been
+ * published by the test. Staged versions stay separate until `approve` is
+ * called, matching the release workflow.
  */
 async function createMockRegistry() {
-  /** Resolves symlinks in `os.tmpdir()` (common on macOS). */
+  /** Resolve macOS tmpdir symlinks so Docker sees the same paths. */
   const tmpDir = fs.realpathSync(os.tmpdir());
-  /**
-   * Temporary storage directory for Verdaccio databases, storage, and auth
-   * configs.
-   */
   const dir = fs.mkdtempSync(path.join(tmpDir, "act-registry-"));
 
-  /**
-   * `runServer` returns `Promise<any>`; we validate the resulting HTTP server
-   * instance below.
-   */
+  /** Verdaccio types this as `any`, so validate the server before using it. */
   const server: unknown = await runServer({
     self_path: path.join(dir, "config.yaml"),
-    /** Storage path for published tarballs and package metadata. */
     storage: path.join(dir, "storage"),
-    /** File storage for registered user credentials. */
     auth: { htpasswd: { file: path.join(dir, "htpasswd") } },
-    /**
-     * Package access rules: allow all users to read/install; require
-     * authentication to publish.
-     */
     packages: {
       "**": { access: "$all", publish: "$authenticated" },
     },
     flags: { stage: true },
-    /** Restrict logging to fatal errors only to keep test logs concise. */
     log: { type: "stdout", format: "pretty", level: "fatal" },
   });
 
@@ -81,14 +56,10 @@ async function createMockRegistry() {
     throw new TypeError("Verdaccio didn't return an HTTP server");
   }
 
-  /**
-   * Port 0 assigns an ephemeral free port, avoiding collisions between parallel
-   * tests.
-   */
+  /** Port 0 avoids collisions between parallel tests. */
   server.listen(0);
   await once(server, "listening");
 
-  /** Retrieves the assigned port (`null` if not listening). */
   const address = server.address();
 
   if (address === null || typeof address === "string") {
@@ -98,10 +69,7 @@ async function createMockRegistry() {
   const { port } = address;
   const url = `http://localhost:${port}`;
 
-  /**
-   * Registers the publisher user via the CouchDB user endpoint (equivalent to
-   * `npm adduser`) and retrieves an authentication token.
-   */
+  /** Register the publisher and capture the token pnpm will use. */
   const userResponse = await fetch(`${url}/-/user/org.couchdb.user:${USER}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
@@ -111,9 +79,8 @@ async function createMockRegistry() {
   const { token } = UserSchema.parse(user);
 
   /**
-   * Creates an `.npmrc` file mapping the auth token to both `localhost` (used
-   * by pnpm on the host) and `host.docker.internal` (used by pnpm inside Docker
-   * containers).
+   * Host pnpm uses `localhost`; workflow containers use `host.docker.internal`.
+   * The auth token must be valid for both registry hostnames.
    */
   const npmrcFile = path.join(dir, "npmrc");
   fs.writeFileSync(
@@ -124,13 +91,12 @@ async function createMockRegistry() {
   );
 
   return {
-    /** Assigned port on localhost. */
     port,
     npmrcFile,
 
     /**
-     * Returns all publicly published versions of a package (excluding staged
-     * versions). Returns an empty array if the package does not exist.
+     * Public versions only; staged versions are visible through
+     * `getStagedVersions`.
      */
     async getVersions(name: string) {
       const response = await fetch(`${url}/${name}`);
@@ -144,10 +110,7 @@ async function createMockRegistry() {
       return Object.keys(PackumentSchema.parse(packument).versions);
     },
 
-    /**
-     * Returns package versions currently in the staging area awaiting approval
-     * (`<name>@<version>`).
-     */
+    /** Versions waiting for staging approval, formatted as `<name>@<version>`. */
     async getStagedVersions() {
       const response = await fetch(`${url}/-/stage`, {
         headers: { authorization: `Bearer ${token}` },
@@ -160,8 +123,8 @@ async function createMockRegistry() {
     },
 
     /**
-     * Publishes a staged version (`<name>@<version>`), what `pnpm stage approve
-     * <stage id>` does. The mock registry asks for no one-time password
+     * Approves a staged version. Verdaccio's test registry does not ask for a
+     * one-time password.
      */
     async approve(spec: string) {
       const response = await fetch(`${url}/-/stage`, {
@@ -189,9 +152,26 @@ async function createMockRegistry() {
     },
 
     /**
-     * Terminates the server, closes active keep-alive connections, and deletes
-     * the temporary storage directory.
+     * Waits until `create-github-release` checks whether a package version has
+     * reached the public registry.
      */
+    async waitForPackumentRequest(name: string) {
+      const { promise, resolve } = Promise.withResolvers<ServerResponse>();
+      /** Keep the narrowed server type visible inside the hoisted handler. */
+      const httpServer = server;
+
+      function onRequest(request: IncomingMessage, response: ServerResponse) {
+        if (request.url === `/${name}`) {
+          httpServer.off("request", onRequest);
+          resolve(response);
+        }
+      }
+
+      httpServer.on("request", onRequest);
+      await once(await promise, "finish");
+    },
+
+    /** Close keep-alive connections and delete the temporary registry data. */
     async close() {
       server.close();
       server.closeAllConnections();

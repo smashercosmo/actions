@@ -1,16 +1,10 @@
-import { MAIN_BRANCH_NAME } from "./actrc";
-import { git } from "./exec";
+import { MAIN_BRANCH_NAME } from "./actrc.ts";
+import { git } from "./exec.ts";
 
 /**
- * Simulates a GitHub pull request merge commit and returns the `pull_request`
- * webhook payload.
- *
- * On GitHub, every open PR maintains a synthetic merge commit at
- * `refs/pull/<number>/merge` representing the merge of the PR branch into the
- * base branch (`main`). Workflows triggered by `pull_request` check out this
- * merge commit to test the integration result. Since the local mock git remote
- * lacks a GitHub server, this function creates the merge commit and ref
- * directly.
+ * Creates GitHub's synthetic PR merge commit and returns a pull request event
+ * payload. The mock remote has no GitHub server to maintain
+ * `refs/pull/<number>/merge`, so tests create it directly.
  */
 function createMockPullRequest({
   repo,
@@ -23,10 +17,7 @@ function createMockPullRequest({
   number: number;
   author?: string;
 }) {
-  /**
-   * Computes a 3-way merge tree between `main` and the PR branch without
-   * modifying the working tree on disk.
-   */
+  /** Compute the merge result without changing the working tree. */
   const tree = git(repo, [
     "merge-tree",
     "--write-tree",
@@ -35,10 +26,8 @@ function createMockPullRequest({
   ]);
 
   /**
-   * Creates the merge commit with `main` as the first parent (`HEAD^1`) and the
-   * PR branch as the second parent (`HEAD^2`). This parent order is critical
-   * because `require-change-intent` inspects `HEAD^1..HEAD` to isolate commits
-   * introduced by the PR.
+   * Keep GitHub's parent order: base as `HEAD^1`, PR branch as `HEAD^2`.
+   * `require-change-intent` relies on `HEAD^1..HEAD` being the PR diff.
    */
   const mergeCommit = git(repo, [
     "commit-tree",
@@ -51,25 +40,15 @@ function createMockPullRequest({
     `Merge ${branch} into ${MAIN_BRANCH_NAME}`,
   ]);
 
-  /**
-   * Updates the `refs/pull/<number>/merge` ref on the mock remote so
-   * `actions/checkout` can fetch it during workflow runs.
-   */
+  /** Publish the synthetic merge ref so `actions/checkout` can fetch it. */
   const mergeRef = `refs/pull/${number}/merge`;
   git(repo, ["update-ref", mergeRef, mergeCommit]);
   git(repo, ["push", "--force", "origin", `${mergeRef}:${mergeRef}`]);
 
-  /**
-   * Points HEAD in the local test repository to the merge commit so act sets
-   * `github.sha` to match the PR merge commit, mirroring GitHub Actions
-   * behavior.
-   */
+  /** Detach at the merge commit so act uses the same `github.sha` GitHub would. */
   git(repo, ["checkout", "--detach", mergeCommit]);
 
-  /**
-   * Generates a partial `pull_request` webhook payload. The author login is
-   * used by workflows to filter out Dependabot PRs.
-   */
+  /** Include only the payload fields these workflows read. */
   return {
     action: "opened",
     number,

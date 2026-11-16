@@ -10,32 +10,25 @@ import {
   getEnv,
   getSecrets,
   getVariables,
-} from "./scripts/actrc";
-import { createMockGitRepo } from "./scripts/create-mock-git-repo";
-import { createMockGitHubServer } from "./scripts/create-mock-github-server";
-import { createMockRegistry } from "./scripts/create-mock-registry";
+} from "./scripts/actrc.ts";
+import { createMockGitRepo } from "./scripts/create-mock-git-repo.ts";
+import { createMockGitHubServer } from "./scripts/create-mock-github-server.ts";
+import { createMockRegistry } from "./scripts/create-mock-registry.ts";
 
-/**
- * Known execution status strings defined by act-test-runner (`SUCCESS`,
- * `FAILED`, `SKIPPED`).
- */
+/** Status values that mean an act step phase actually ran. */
 const STATUSES = new Set<string>(Object.values(ActExecStatus));
 
 /**
- * Checks whether a specific step execution phase actually ran.
- *
- * Act-test-runner reports entries for each phase (`pre`, `main`, and `post`).
- * Phases that were not executed have missing or empty status values, so we
- * verify the status against known valid values.
+ * Act-test-runner records `pre`, `main`, and `post` phases; phases that did not
+ * execute have no valid status.
  */
 function hasRun(step: ActStepExecResult) {
   return STATUSES.has(step.status);
 }
 
 /**
- * Generates a human-readable summary of a workflow run, listing jobs, executed
- * steps, and error output from failed steps. Included in assertion errors to
- * aid debugging.
+ * Summary included in assertion errors so failed workflow tests show the jobs,
+ * steps, and failed step output.
  */
 function describeRun(result: ActWorkflowExecResult) {
   const jobs = Object.values(result.jobs);
@@ -53,10 +46,7 @@ function describeRun(result: ActWorkflowExecResult) {
     }
   }
 
-  /**
-   * Captures act runner stderr/stdout when act terminates before scheduling any
-   * jobs.
-   */
+  /** Include act's own output when it fails before scheduling jobs. */
   if (jobs.length === 0) {
     lines.push(result.output);
   }
@@ -65,9 +55,8 @@ function describeRun(result: ActWorkflowExecResult) {
 }
 
 /**
- * Finds the main execution result of a specific step within a job. Throws an
- * informative error including the full run summary if the job or step did not
- * execute.
+ * Finds a step result and includes the full workflow summary when it is
+ * missing.
  */
 function getStep(result: ActWorkflowExecResult, job: string, name: string) {
   const step = result.jobs[job]?.steps.find(
@@ -83,11 +72,7 @@ function getStep(result: ActWorkflowExecResult, job: string, name: string) {
   return step;
 }
 
-/**
- * Asserts that the overall workflow execution completed with the expected
- * status. Fails with a detailed report of job and step outputs when the status
- * differs.
- */
+/** Assert the workflow result with the run summary attached on failure. */
 function assertStatus(result: ActWorkflowExecResult, expected: ActExecStatus) {
   if (result.status !== expected) {
     throw new Error(
@@ -97,7 +82,7 @@ function assertStatus(result: ActWorkflowExecResult, expected: ActExecStatus) {
 }
 
 /**
- * Extends Vitest's `it` test runner with isolated workflow fixtures:
+ * Extends Vitest's `it` with isolated workflow fixtures:
  *
  * - `registry`: Local Verdaccio npm registry instance for package publishing and
  *   staging.
@@ -105,8 +90,7 @@ function assertStatus(result: ActWorkflowExecResult, expected: ActExecStatus) {
  *   bare remote.
  * - `github`: Mock GitHub REST API server for pull requests, releases, and token
  *   management.
- * - `act`: Factory function returning an `ActRunner` configured with environment
- *   variables, secrets, and arguments pointing to the test's mock services.
+ * - `act`: factory for a fresh `ActRunner` wired to the mock services.
  *
  * Fixtures are isolated per test and automatically torn down after execution.
  */
@@ -123,8 +107,8 @@ function withWorkflowFixtures(base: TestAPI) {
         return registry;
       })
       /**
-       * Requires `registry` because repository initialization publishes the
-       * initial package version.
+       * Repository setup publishes the initial package, so it needs the mock
+       * registry first.
        */
       .extend("consumer", async ({ registry }, { onCleanup }) => {
         const consumer = await createMockGitRepo({ registry });
@@ -134,25 +118,19 @@ function withWorkflowFixtures(base: TestAPI) {
 
         return consumer;
       })
-      // oxlint-disable-next-line no-empty-pattern -- Vitest fixture dependency resolution requires `{}` in the signature.
-      .extend("github", async ({}, { onCleanup }) => {
-        const github = await createMockGitHubServer();
+      /** GitHub releases create tags in the consumer's remote repository. */
+      .extend("github", async ({ consumer }, { onCleanup }) => {
+        const github = await createMockGitHubServer({
+          remoteRepoDir: consumer.remoteRepoDir,
+        });
         onCleanup(async () => {
           await github.close();
         });
 
         return github;
       })
-      /**
-       * Returns a runner factory because `ActRunner` instances cannot be reused
-       * across runs.
-       */
+      /** `ActRunner` instances are single-use, so expose a factory. */
       .extend("act", ({ consumer, github, registry }) => () => {
-        /**
-         * Configures act with environment variables, secrets, variables, and
-         * flags routing requests to the mock GitHub server and registry (see
-         * `actrc.ts`).
-         */
         const runner = new ActRunner()
           .withEnv(
             getEnv({
@@ -168,7 +146,6 @@ function withWorkflowFixtures(base: TestAPI) {
               localRepoDir: consumer.localRepoDir,
               remoteDir: consumer.remoteDir,
               npmrcFile: registry.npmrcFile,
-              /** Staged once globally before all tests (see `global-setup.ts`). */
               localRepositories: inject("localRepositories"),
             }),
           );

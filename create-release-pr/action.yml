@@ -1,28 +1,30 @@
 name: Create Release PR
 description:
-  GitHub Action for applying pending change intents with `pnpm version -r`
-  and opening (or updating) a release PR with the result.
+  Applies pending change intents with `pnpm version -r`, then opens or updates
+  the release pull request.
 
 inputs:
   token:
-    description: GitHub App installation token with `contents` and `pull-requests` write permissions.
+    description: GitHub App installation token with write access to contents and pull requests.
     required: true
   app-slug:
-    description: GitHub App slug, used as the commit author.
+    description: GitHub App slug to use for the release commit author.
     required: true
   base:
-    description: Branch the release PR targets.
+    description: Branch targeted by the release pull request.
     default: main
   branch:
-    description: Branch the release PR is opened from. Force-pushed on every run, so it must not be used for anything else.
+    description: Branch used for the release pull request. It is force-pushed
+      on every run, so reserve it for this action.
     default: release
   format-command:
-    description: Command that formats the files `pnpm version` changed, e.g. `pnpm oxfmt`.
+    description: Optional formatter command for files changed by `pnpm version`,
+      for example `pnpm oxfmt`.
 
 outputs:
   pr-number:
-    description: Number of the opened or updated release PR
+    description: Number of the created or updated release pull request.
 
 runs:
   using: node24
-  main: dist/index.js
+  main: index.ts

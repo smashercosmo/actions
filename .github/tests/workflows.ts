@@ -1,20 +1,8 @@
-import { ACTIONS_REF, ACTIONS_REPOSITORY } from "./scripts/actrc";
+import { ACTIONS_REF, ACTIONS_REPOSITORY } from "./scripts/actrc.ts";
 
-/**
- * Path to our reusable workflows folder, formatted the way an external
- * "consumer" repository would reference it (e.g.
- * `smashercosmo/actions/.github/workflows`).
- */
+/** Reusable workflow path as an external consumer repository would write it. */
 const WORKFLOWS = `${ACTIONS_REPOSITORY}/.github/workflows`;
 
-/**
- * A sample `ci.yml` file that an external repository would put in its
- * `.github/workflows/`.
- *
- * All it does is call our reusable `ci.yml` workflow using `uses: ...`. In our
- * tests, we don't save this to a file on disk; we pass this string directly to
- * `act` via `withWorkflow({ body: CI_WORKFLOW })` to test how `ci.yml` runs.
- */
 const CI_WORKFLOW = String.raw`
   name: CI
   
@@ -32,26 +20,15 @@ const CI_WORKFLOW = String.raw`
       uses: ${WORKFLOWS}/ci.yml@${ACTIONS_REF}
 `;
 
-/**
- * A sample `release.yml` file that an external repository would use to trigger
- * releases.
- *
- * It calls our reusable `release.yml` workflow.
- *
- * - When `npm: true` is passed, the workflow will run CI checks and publish
- *   packages to our fake npm registry before drafting a GitHub release.
- * - `includePrivate: true` passes `include-private`, so private packages get
- *   GitHub releases too, like a repository that is versioned and tagged but
- *   never published.
- * - The `\${{` is escaped so JavaScript doesn't treat it as template
- *   interpolation, allowing GitHub Actions expressions like `${{
- *   vars.RELEASE_BOT_CLIENT_ID }}` to pass through untouched. `act` fills in
- *   those variables using our test configs in `actrc.ts`.
- */
 function getReleaseWorkflow({
   npm = false,
   includePrivate = false,
-}: { npm?: boolean; includePrivate?: boolean } = {}) {
+  npmApprovalTimeout = 0,
+}: {
+  npm?: boolean;
+  includePrivate?: boolean;
+  npmApprovalTimeout?: number;
+} = {}) {
   return String.raw`
     name: Release
     
@@ -72,6 +49,7 @@ function getReleaseWorkflow({
           app-client-id: \${{ vars.RELEASE_BOT_CLIENT_ID }}
           npm: ${npm}
           include-private: ${includePrivate}
+          npm-approval-timeout: ${npmApprovalTimeout}
         secrets:
           app-private-key: \${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
   `;

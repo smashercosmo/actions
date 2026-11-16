@@ -2,8 +2,6 @@ import { defineConfig } from "oxfmt";
 
 export default defineConfig({
   $schema: "./node_modules/oxfmt/configuration_schema.json",
-  /** Built files, committed but not written by hand */
-  ignorePatterns: ["*/dist/**"],
   arrowParens: "always",
   jsdoc: true,
   printWidth: 80,

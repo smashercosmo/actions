@@ -6,19 +6,19 @@ This repository provides reusable actions and workflows for managing releases. T
 
 ## Available actions
 
-| Action | Description |
-|---|---|
-| [`create-token`](./create-token) | Creates a GitHub App installation token and automatically revokes it when the job finishes. |
-| [`create-release-pr`](./create-release-pr) | Applies pending change intents and opens or updates a release PR. |
-| [`create-github-release`](./create-github-release) | Creates a GitHub release for each unreleased public package, using its `CHANGELOG.md`. |
-| [`require-change-intent`](./require-change-intent) | Fails a pull request if it does not include a change intent. |
+| Action                                             | Description                                                                                 |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [`create-token`](./create-token)                   | Creates a GitHub App installation token and automatically revokes it when the job finishes. |
+| [`create-release-pr`](./create-release-pr)         | Applies pending change intents and opens or updates a release PR.                           |
+| [`create-github-release`](./create-github-release) | Creates a GitHub release for each unreleased public package, using its `CHANGELOG.md`.      |
+| [`require-change-intent`](./require-change-intent) | Fails a pull request if it does not include a change intent.                                |
 
 The repository also provides reusable workflows that combine these actions:
 
-| Workflow | Description |
-|---|---|
-| [`ci.yml`](./.github/workflows/ci.yml) | Checks that pull requests include a change intent, then builds, lints, checks formatting, and runs tests. |
-| [`release.yml`](./.github/workflows/release.yml) | Creates or updates the release PR, then stages packages on npm and creates draft GitHub releases after the release PR is merged. |
+| Workflow                                         | Description                                                                                                                                           |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`ci.yml`](./.github/workflows/ci.yml)           | Checks that pull requests include a change intent, then builds, lints, checks formatting, and runs tests.                                             |
+| [`release.yml`](./.github/workflows/release.yml) | Creates or updates the release PR, stages packages on npm after the release PR is merged, and publishes GitHub releases once the versions are on npm. |
 
 ## Usage
 
@@ -48,19 +48,19 @@ Example:
 
 **Inputs**
 
-| Input | Required | Description |
-|---|---|---|
-| `client-id` | yes | Client ID of the GitHub App. |
-| `private-key` | yes | Private key of the GitHub App. |
-| `permission-contents` | no | Permission for repository contents: `read` or `write`. Defaults to `read`. |
-| `permission-pull-requests` | no | Permission for pull requests: `read` or `write`. Defaults to `read`. |
+| Input                      | Required | Description                                                                |
+| -------------------------- | -------- | -------------------------------------------------------------------------- |
+| `client-id`                | yes      | Client ID of the GitHub App.                                               |
+| `private-key`              | yes      | Private key of the GitHub App.                                             |
+| `permission-contents`      | no       | Permission for repository contents: `read` or `write`. Defaults to `read`. |
+| `permission-pull-requests` | no       | Permission for pull requests: `read` or `write`. Defaults to `read`.       |
 
 **Outputs**
 
-| Output | Description |
-|---|---|
-| `token` | GitHub App installation access token. |
-| `app-slug` | Slug of the GitHub App. |
+| Output     | Description                           |
+| ---------- | ------------------------------------- |
+| `token`    | GitHub App installation access token. |
+| `app-slug` | Slug of the GitHub App.               |
 
 ### create-release-pr
 
@@ -105,33 +105,37 @@ Example:
 
 **Inputs**
 
-| Input | Required | Description |
-|---|---|---|
-| `token` | yes | GitHub App installation token with `contents` and `pull-requests` write permissions. |
-| `app-slug` | yes | Slug of the GitHub App. Used as the author of the generated commit. |
-| `base` | no | Branch the release PR targets. Defaults to `main`. |
-| `branch` | no | Branch used for the release PR. Defaults to `release`. This branch is force-pushed on every run, so do not use it for anything else. |
-| `format-command` | no | Command used to format the files changed by `pnpm version`. The changed file paths are appended to the command as arguments. If empty, no formatting is performed. |
+| Input            | Required | Description                                                                                                                                                        |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `token`          | yes      | GitHub App installation token with `contents` and `pull-requests` write permissions.                                                                               |
+| `app-slug`       | yes      | Slug of the GitHub App. Used as the author of the generated commit.                                                                                                |
+| `base`           | no       | Branch the release PR targets. Defaults to `main`.                                                                                                                 |
+| `branch`         | no       | Branch used for the release PR. Defaults to `release`. This branch is force-pushed on every run, so do not use it for anything else.                               |
+| `format-command` | no       | Command used to format the files changed by `pnpm version`. The changed file paths are appended to the command as arguments. If empty, no formatting is performed. |
 
 **Outputs**
 
-| Output | Description |
-|---|---|
+| Output      | Description                                                                      |
+| ----------- | -------------------------------------------------------------------------------- |
 | `pr-number` | Number of the opened or updated release PR. Not set if no release PR was needed. |
 
 ### create-github-release
 
-Creates a draft GitHub release for each eligible package in the workspace.
+Creates and publishes a GitHub release for the current version of each eligible package in the workspace.
 
 Each release is named `v<version>`, and its release notes are taken from the section of that package's `CHANGELOG.md` corresponding to the released version.
 
-A release is created only if one with the same tag does not already exist. This check includes both published releases and existing drafts.
+Publishing the release creates its Git tag. The tag points to the commit where that package version was set in its `package.json`.
 
-When a draft is published, GitHub creates the corresponding Git tag. The tag points to the commit where that package version was set in its `package.json`.
+A release is created only if the tag `v<version>` does not exist yet. The tag tells that the version is released already, so the action can run on every push and does nothing for a version that has its release.
+
+With `npm: true`, the release of a public package is created only once its version is on npm. A staged version is not, until someone approves it. The action can wait for that (`npm-wait-minutes`). If the version still isn't on npm when the time is up, the action skips its release with a warning and succeeds, and a later run creates it.
+
+The releases are created with the token passed to the action. Releases created with `GITHUB_TOKEN` do not trigger other workflows, such as one that runs `on: release`.
 
 **Requirements**
 
-- The repository must be checked out with its complete Git history (`fetch-depth: 0`). The action uses the history to find the commit that introduced each package version.
+- The repository must be checked out with its complete Git history and its tags (`fetch-depth: 0`). The action uses the history to find the commit that introduced each package version, and the tags to tell which versions are released already.
 - pnpm must be installed.
 - The workspace must not contain more than one package that needs a release. All releases use the tag format `v<version>`, so multiple packages with the same tag would conflict.
 
@@ -145,10 +149,12 @@ Example:
 
 **Inputs**
 
-| Input | Required | Description |
-|---|---|---|
-| `token` | yes | GitHub token with `contents` write permission. |
-| `include-private` | no | Also create releases for private packages that have a version. Defaults to `false`. Useful for repositories that use versioning and Git tags but do not publish packages to npm. |
+| Input              | Required | Description                                                                                                                                                                      |
+| ------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `token`            | yes      | GitHub token with `contents` write permission.                                                                                                                                   |
+| `include-private`  | no       | Also create releases for private packages that have a version. Defaults to `false`. Useful for repositories that use versioning and Git tags but do not publish packages to npm. |
+| `npm`              | no       | Create the release of a public package only once its version is on npm. Defaults to `false`. Private packages are never on npm, so they are released right away.                 |
+| `npm-wait-minutes` | no       | How long to wait for package versions to appear on npm, checking every 30 seconds. Defaults to `0`, which checks once. Only used when `npm` is enabled.                           |
 
 ### require-change-intent
 
@@ -197,7 +203,7 @@ Runs `require-change-intent` on pull requests, except those created by Dependabo
 Runs the following checks:
 
 - `pnpm change status`
-- `pnpm build`
+- `pnpm build`, if the workspace defines a `build` script.
 - `pnpm lint`
 - `pnpm format --check`
 - `pnpm test`, if the workspace defines a `test` script.
@@ -235,9 +241,9 @@ jobs:
 
 **Inputs**
 
-| Input | Required | Description |
-|---|---|---|
-| `playwright-browsers` | no | Space-separated list of Playwright browsers to install before running tests. Uses the Playwright version from the first workspace package that depends on it. No browsers are installed by default. |
+| Input                 | Required | Description                                                                                                                                                                                         |
+| --------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `playwright-browsers` | no       | Space-separated list of Playwright browsers to install before running tests. Uses the Playwright version from the first workspace package that depends on it. No browsers are installed by default. |
 
 **Required status checks**
 
@@ -254,14 +260,23 @@ Use both names as required status checks in the main branch ruleset.
 
 A reusable workflow that handles the release process.
 
-It is intended to run on every push to `main`. Depending on the changes, it either creates or updates a release PR, prepares a release after that PR is merged, or does nothing.
+It is intended to run on every push to `main`. Depending on the changes, it either creates or updates a release PR, prepares a release after that PR is merged, or does nothing. On every run, it also publishes the GitHub release of the current version if there's none yet.
 
 **What happens on each push to `main`**
 
 - **Pending change intents exist:** Opens or updates the release PR using `create-release-pr`. The changed files are formatted with `pnpm format`.
-- **A release PR was just merged, or the workflow was started manually:** When `npm: true`, runs `ci.yml` against the commit being released, builds the packages in `./packages/*`, and stages them on npm using `pnpm stage publish -r`. It then creates draft GitHub releases using `create-github-release`.
+- **A release PR was just merged, or the workflow was started manually:** When `npm: true`, runs `ci.yml` against the commit being released, builds the packages in `./packages/*`, and stages them on npm using `pnpm stage publish -r`.
+- **Always:** Publishes the GitHub release of the current version using `create-github-release`, unless it exists already. Publishing it creates the corresponding Git tag.
 
-Publishing the GitHub release draft creates the corresponding Git tag.
+**Releases and npm approval**
+
+When `npm: true`, a GitHub release is published only once its version is on npm, which happens when someone approves the staged version (`pnpm stage approve`). After staging, the run of the merge waits up to `npm-approval-timeout` minutes for the approval and publishes the release as soon as the version is on npm.
+
+If the approval comes later, the run still succeeds, with a warning. The next run of the workflow publishes the release: the next push to `main`, a re-run, or a manual run. Until the version is on npm, `create-release-pr` refuses to open the next release PR, so a version can't be skipped.
+
+While the run of the merge waits, it holds the concurrency group, so other runs wait in the queue.
+
+The releases are created with `GITHUB_TOKEN`, so they don't trigger other workflows, such as one that runs `on: release`. To run something after a release, add a job to the calling workflow with `needs: release`.
 
 **Important: Do not merge the release PR while pending change intents are present.**
 
@@ -325,18 +340,19 @@ The private key can be stored as a secret in the `release` environment. Secrets 
 
 **Inputs**
 
-| Input | Required | Description |
-|---|---|---|
-| `app-client-id` | yes | Client ID of the GitHub App used to open the release PR. |
-| `npm` | no | Whether to run CI and stage packages on npm before creating GitHub release drafts. Defaults to `false`. |
-| `include-private` | no | Whether to also create draft releases for private packages that have a version. Defaults to `false`. |
-| `playwright-browsers` | no | Playwright browsers passed to `ci.yml`. See the CI workflow documentation. Only used when `npm` is enabled. |
+| Input                  | Required | Description                                                                                                                                        |
+| ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app-client-id`        | yes      | Client ID of the GitHub App used to open the release PR.                                                                                           |
+| `npm`                  | no       | Whether to run CI and stage packages on npm, and publish GitHub releases only for versions that are on npm. Defaults to `false`.                   |
+| `include-private`      | no       | Whether to also create releases for private packages that have a version. Defaults to `false`.                                                     |
+| `playwright-browsers`  | no       | Playwright browsers passed to `ci.yml`. See the CI workflow documentation. Only used when `npm` is enabled.                                        |
+| `npm-approval-timeout` | no       | Minutes the run of the merge waits for the staged versions to be approved on npm. Defaults to `10`, at most `20`. Only used when `npm` is enabled. |
 
 **Secrets**
 
-| Secret | Required | Description |
-|---|---|---|
-| `app-private-key` | yes | Private key of the GitHub App used to open the release PR. |
+| Secret            | Required | Description                                                |
+| ----------------- | -------- | ---------------------------------------------------------- |
+| `app-private-key` | yes      | Private key of the GitHub App used to open the release PR. |
 
 ## Development
 
@@ -351,12 +367,6 @@ Install dependencies:
 pnpm install
 ```
 
-Build all actions:
-
-```bash
-pnpm build
-```
-
 Run linting and type checks:
 
 ```bash
@@ -369,22 +379,26 @@ Format the code:
 pnpm format
 ```
 
-GitHub runs actions directly from this repository without installing their dependencies.
+The actions are written in TypeScript and run as they are, with no build step. The runner starts them with Node.js 24 (`runs.using: node24` in `action.yml`), which strips the types before running the code. The `action.yml` of each action points at its TypeScript entry file, e.g. `main: index.ts`.
 
-For this reason, every action and its dependencies must be bundled into its own `dist` directory. These directories are committed to the repository alongside the source code.
+This puts a few constraints on the code:
 
-Whenever you change an action's source code or dependencies, run `pnpm build` and commit the updated `dist` files.
+- Imports name the `.ts` file, e.g. `import { info } from "#shared/core.ts"`, as Node.js doesn't map `.js` imports to `.ts` files.
+- Only TypeScript that is JavaScript once the types are removed: no `enum`, `namespace` or parameter properties. `erasableSyntaxOnly` in `tsconfig.json` enforces it.
+- Imports of types only use `import type`, which `verbatimModuleSyntax` enforces.
+- No runtime dependencies. GitHub runs an action straight from this repository, without installing anything, so an action can import Node.js built-ins and the files of this repository (such as [`shared`](./shared)) only. Packages from npm are for the tests and the tooling. The workflow tests run the actions from a copy of the repository without `node_modules`, so an import of an npm package makes them fail.
 
-CI checks that the committed `dist` files match the source code. If they are out of date, CI fails.
-
-To add a new action:
-
-1. Create a directory containing its `action.yml` and source files.
-2. Add its entry files to `tsdown.config.ts`.
+To add a new action, create a directory containing its `action.yml` and source files.
 
 ### Tests
 
-Run the action tests:
+Run the unit tests of the actions and the [shared helpers](./shared), including the checks of the actions' schemas against GitHub's and pnpm's types:
+
+```bash
+pnpm test
+```
+
+Run the workflow tests:
 
 ```bash
 pnpm test:act
@@ -446,9 +460,7 @@ pnpm change --bump none
 
 The release workflow collects pending change intents and creates a release PR containing the updated package versions and changelogs.
 
-When the release PR is merged, the workflow creates draft GitHub releases for the affected packages.
-
-Publishing a draft creates its corresponding `v<version>` Git tag.
+When the release PR is merged, the workflow publishes the GitHub release of the new version, which creates its `v<version>` Git tag.
 
 **Nothing is published to npm by this repository's own release process.** Pin the actions and reusable workflows to the commit hash of a release.
 
@@ -461,10 +473,10 @@ The workflow requires a GitHub App installed on the repository with:
 
 The repository must also have a GitHub environment named `release` configured with:
 
-| Setting | Value |
-|---|---|
-| Variable | `RELEASE_BOT_CLIENT_ID` — the GitHub App's client ID. |
-| Secret | `RELEASE_BOT_PRIVATE_KEY` — the GitHub App's private key. |
+| Setting  | Value                                                     |
+| -------- | --------------------------------------------------------- |
+| Variable | `RELEASE_BOT_CLIENT_ID` — the GitHub App's client ID.     |
+| Secret   | `RELEASE_BOT_PRIVATE_KEY` — the GitHub App's private key. |
 
 ## License
 

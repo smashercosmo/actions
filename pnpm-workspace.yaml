@@ -1,4 +1,6 @@
 hoist: false
+minimumReleaseAgeExclude:
+  - '@smashercosmo/configs@0.2.0'
 saveExact: true
 
 versioning:

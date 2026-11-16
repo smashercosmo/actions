@@ -1,18 +1,27 @@
 name: Create GitHub Release
 description:
-  GitHub Action for creating a draft GitHub release, based on CHANGELOG.md.
-  Publishing a draft creates its tag. Needs pnpm and the full git history of the repository.
+  Creates a GitHub release from CHANGELOG.md once the package version is ready.
+  Creating the release also creates its tag. Requires pnpm and a checkout with
+  full history and tags.
 
 inputs:
   token:
     description: GitHub token with `contents` write permission.
     required: true
   include-private:
-    description:
-      Also release private packages that have a version,
-      e.g. a repository that is versioned and tagged but never published to npm.
+    description: Also create releases for versioned private packages, such as
+      packages that are tagged in GitHub but not published to npm.
     default: "false"
+  npm:
+    description: Create public package releases only after the version is
+      available on npm. Staged versions count only after approval.
+    default: "false"
+  npm-wait-minutes:
+    description:
+      Minutes to wait for the package version to appear on npm, checking every
+      30 seconds. `0` checks once. Used only when `npm` is enabled.
+    default: "0"
 
 runs:
   using: node24
-  main: dist/index.js
+  main: index.ts

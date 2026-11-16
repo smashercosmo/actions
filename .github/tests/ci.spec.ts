@@ -2,44 +2,31 @@ import { ActExecStatus } from "act-test-runner";
 import fs from "node:fs";
 import { describe, expect, it as base } from "vitest";
 
-import { assertStatus, getStep, withWorkflowFixtures } from "./context";
+import { assertStatus, getStep, withWorkflowFixtures } from "./context.ts";
 import {
   FEATURE_BRANCH_NAME,
   MAIN_BRANCH_NAME,
   RELEASE_BRANCH_NAME,
-} from "./scripts/actrc";
+} from "./scripts/actrc.ts";
 import {
   addChangeIntent,
   applyChangeIntents,
   mergeBranch,
-} from "./scripts/change-intents";
-import { createMockPullRequest } from "./scripts/create-mock-pull-request";
-import { createMockPush } from "./scripts/create-mock-push";
-import { git } from "./scripts/exec";
-import { CI_WORKFLOW } from "./workflows";
+} from "./scripts/change-intents.ts";
+import { createMockPullRequest } from "./scripts/create-mock-pull-request.ts";
+import { createMockPush } from "./scripts/create-mock-push.ts";
+import { git } from "./scripts/exec.ts";
+import { CI_WORKFLOW } from "./workflows.ts";
 
 /**
- * Test runner instance equipped with isolated workflow fixtures (`context.ts`).
- * Each test receives a dedicated mock consumer repository, GitHub API server,
- * npm registry, and an `act` runner. Vitest's `signal` aborts act executions on
- * test timeout.
+ * Each test gets isolated workflow fixtures and an act runner tied to Vitest's
+ * abort signal.
  */
 const it = withWorkflowFixtures(base);
 
 /**
- * Tests for the reusable CI workflow (`.github/workflows/ci.yml`).
- *
- * The workflow consists of two jobs:
- *
- * - `changeset`: Enforces that pull requests include a change intent (`pnpm
- *   change`). Runs only on pull requests, skipping direct pushes and Dependabot
- *   PRs.
- * - `check`: Executes standard consumer workspace checks (`pnpm build`, `pnpm
- *   lint`, `pnpm format --check`, `pnpm test`).
- *
- * Each test sets up git state in the mock consumer repository, triggers the
- * workflow with act using simulated GitHub events (pull request or push), and
- * validates job statuses and step outputs.
+ * Reusable CI workflow scenarios: change-intent enforcement plus the standard
+ * workspace check job.
  */
 describe("ci.yml", () => {
   it("should fail a pull request that doesn't add a change intent", async ({
@@ -50,7 +37,6 @@ describe("ci.yml", () => {
     expect.hasAssertions();
 
     const repo = consumer.localRepoDir;
-    /** Creates a feature branch with a commit but no change intent. */
     git(repo, ["switch", "-c", FEATURE_BRANCH_NAME]);
     git(repo, ["commit", "--allow-empty", "-m", "feat: add a feature"]);
 
@@ -74,8 +60,8 @@ describe("ci.yml", () => {
       "This pull request doesn't add a change intent.",
     );
     /**
-     * Verifies `check` still succeeds: change intent validation is isolated to
-     * `changeset`.
+     * Change-intent validation is isolated to the `changeset` job; ordinary
+     * checks should still pass.
      */
     expect(result.jobs["check"]?.status).toBe(ActExecStatus.SUCCESS);
   });
@@ -113,10 +99,7 @@ describe("ci.yml", () => {
     expect(
       getStep(result, "changeset", "Require a change intent").output,
     ).toContain("Change intents added:");
-    /**
-     * Verifies that workspace verification scripts ran in the expected order
-     * (the mock scripts echo their names so tests can confirm execution).
-     */
+    /** Mock scripts echo their names, giving the test an execution-order check. */
     expect(
       ["Build", "Lint and type-check", "Check formatting", "Test"].map(
         (name) => getStep(result, "check", name).output,
@@ -139,10 +122,8 @@ describe("ci.yml", () => {
 
     const repo = consumer.localRepoDir;
     /**
-     * Simulates a release PR: a feature with a change intent was merged into
-     * `main`, and the release branch applied the intent (deleting the intent
-     * file and updating `.changeset/ledger.yaml`). The modified ledger
-     * indicates no new intent is required.
+     * A release PR applies intents and updates the ledger, so it does not need
+     * to add a fresh intent.
      */
     await addChangeIntent({
       repo,
@@ -199,8 +180,8 @@ describe("ci.yml", () => {
       branch: RELEASE_BRANCH_NAME,
     });
     /**
-     * A fix with its own intent lands on `main` after the release PR was built,
-     * so the merge commit of the release PR has that intent pending
+     * A later intent on `main` means this release PR is stale and must wait for
+     * the release workflow to rebuild it.
      */
     await addChangeIntent({
       repo,
@@ -240,7 +221,6 @@ describe("ci.yml", () => {
     expect.hasAssertions();
 
     const repo = consumer.localRepoDir;
-    /** Identical PR branch to the first test, but authored by Dependabot. */
     git(repo, ["switch", "-c", FEATURE_BRANCH_NAME]);
     git(repo, ["commit", "--allow-empty", "-m", "chore: bump an action"]);
 
@@ -258,10 +238,7 @@ describe("ci.yml", () => {
       .run({ signal });
 
     assertStatus(result, ActExecStatus.SUCCESS);
-    /**
-     * The `changeset` job was skipped (act omits skipped jobs from
-     * `result.jobs`).
-     */
+    /** Act omits skipped jobs from `result.jobs`. */
     expect(result.jobs).not.toHaveProperty("changeset");
     expect(result.jobs["check"]?.status).toBe(ActExecStatus.SUCCESS);
   });
@@ -274,10 +251,6 @@ describe("ci.yml", () => {
     expect.hasAssertions();
 
     const repo = consumer.localRepoDir;
-    /**
-     * Direct commit on `main` without a change intent; `changeset` job is
-     * skipped on push events.
-     */
     git(repo, ["commit", "--allow-empty", "-m", "feat: add a feature"]);
 
     const result = await act()
@@ -286,7 +259,6 @@ describe("ci.yml", () => {
       .run({ signal });
 
     assertStatus(result, ActExecStatus.SUCCESS);
-    /** Skipped because push events do not require change intents. */
     expect(result.jobs).not.toHaveProperty("changeset");
     expect(result.jobs["check"]?.status).toBe(ActExecStatus.SUCCESS);
   });
@@ -300,9 +272,8 @@ describe("ci.yml", () => {
 
     const repo = consumer.localRepoDir;
     /**
-     * Simulates uncommitted build artifacts: modifying `package.json` so the
-     * build writes new content to `built.txt`, conflicting with the committed
-     * version.
+     * Make the build rewrite a committed file so the clean-tree check can catch
+     * stale build output.
      */
     const manifest = fs.readFileSync(`${repo}/package.json`, "utf8");
     fs.writeFileSync(
@@ -327,7 +298,6 @@ describe("ci.yml", () => {
     assertStatus(result, ActExecStatus.FAILED);
     expect(step.status).toBe(ActExecStatus.FAILED);
     expect(step.output).toContain("The build changed these files.");
-    /** Verifies `git status --porcelain` detects the modified file. */
     expect(step.output).toContain(" M built.txt");
   });
 });

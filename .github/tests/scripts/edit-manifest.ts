@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 
-import { git } from "./exec";
+import { git } from "./exec.ts";
 
-/** The fields of a package.json the tests change, the others are kept */
+/** Manifest fields the tests edit; unknown fields are preserved. */
 const ManifestSchema = z.looseObject({
   private: z.boolean().optional(),
   scripts: z.record(z.string(), z.string()).default({}),
@@ -12,10 +12,7 @@ const ManifestSchema = z.looseObject({
 
 type Manifest = z.infer<typeof ManifestSchema>;
 
-/**
- * Rewrites the package.json in `dir` of the mock repository and commits it,
- * e.g. to make a package private or a script fail
- */
+/** Edits and commits a package manifest in the mock repository. */
 function editManifest({
   repo,
   dir,
@@ -33,7 +30,7 @@ function editManifest({
   git(repo, ["commit", "-am", "chore: edit package.json"]);
 }
 
-/** Makes a script of the package.json exit with 1 */
+/** Replaces a package script with a failing command. */
 function failScript(script: string) {
   return (manifest: Manifest): Manifest => ({
     ...manifest,

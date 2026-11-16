@@ -1,12 +1,7 @@
 name: CI
 
-# Reusable CI workflow for pnpm workspaces tracking version changes via change
-# intents (`pnpm change`). Called by downstream consumer repositories on pull
-# requests and pushes to `main`, and invoked by this repository's release
-# workflow before publishing to npm. See the README for usage instructions.
-#
-# Executes standard root-level workspace scripts: `pnpm build`, `pnpm lint`,
-# `pnpm format --check`, and `pnpm test` (if defined).
+# Reusable CI for pnpm workspaces that use `pnpm change` intents. It runs the
+# standard root scripts (`build`, `lint`, `format --check`, `test`) when present.
 on:
   workflow_call:
     inputs:
@@ -17,30 +12,15 @@ on:
 
 permissions: {}
 
-# Explicit timeouts are set for all jobs to avoid holding GitHub Actions runners
-# for the default 6-hour limit if a process (such as a browser test) hangs.
-
-# Concurrency configuration:
-# - Pull requests: grouped by branch ref; pushing new commits cancels in-flight runs.
-# - Other events (e.g. push to main): assigned a unique group via `github.run_id` so
-#   runs execute concurrently without queueing or auto-cancelling (which would bypass
-#   automated release steps).
-# - Prefixed with `github.workflow` so caller workflows (e.g. CI vs. Release) do not
-#   conflict. Calling workflows should not define top-level concurrency groups.
+# Pull requests cancel older runs for the same branch. Pushes use unique groups
+# so release-related runs are not accidentally cancelled or queued.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Enforces that every pull request includes a change intent (`pnpm change` or
-  # `pnpm change --bump none` for changes that require no release). Intended as a
-  # required status check on `main`. Skipped on direct pushes and during release
-  # workflow runs (skipped jobs satisfy required status checks).
-  #
-  # Skipped for Dependabot PRs because automated dependency bumps do not warrant
-  # package releases and Dependabot cannot generate intents. The PR author is
-  # verified via `github.event.pull_request.user.login` to prevent spoofing via
-  # `github.actor`.
+  # Required PR check for change intents. Dependabot is skipped because it
+  # cannot generate intents and dependency bumps do not release this package.
   changeset:
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
@@ -48,9 +28,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Fetches the PR merge commit and its parents (`fetch-depth: 2`). `HEAD^1`
-      # points to the target base branch tip, allowing `HEAD^1..HEAD` to isolate
-      # the changes introduced by the pull request.
+      # Fetch the PR merge commit and parents so `HEAD^1..HEAD` is the PR diff.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -73,18 +51,15 @@ jobs:
         with:
           require-lockfile: true
 
-      # Validates change intents against package names and valid bump types,
-      # catching syntax or schema errors in PRs before they reach the release workflow.
+      # Catch invalid package names or bump types before release planning.
       - name: Validate change intents
         run: pnpm change status
 
-      # Runs build prior to linting so workspace packages that rely on emitted types
-      # or build artifacts from sibling packages can resolve them.
+      # Build first so lint/tests can consume generated sibling package output.
       - name: Build
-        run: pnpm build
+        run: pnpm run --if-present build
 
-      # Verifies that `pnpm build` leaves the working tree clean, detecting
-      # stale, uncommitted build artifacts or unignored generated files.
+      # Build output must either be committed or ignored.
       - name: Check that the build leaves no changes
         run: |
           changed=$(git status --porcelain)
@@ -102,9 +77,7 @@ jobs:
       - name: Check formatting
         run: pnpm format --check
 
-      # `pnpm install` doesn't download the browsers or their system packages.
-      # Installs both with the Playwright of the first workspace package that
-      # depends on it, so the browsers match the version the tests run.
+      # Install browsers with the Playwright version used by the workspace.
       - name: Install Playwright browsers
         if: inputs.playwright-browsers != ''
         env:

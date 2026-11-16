@@ -1,26 +1,23 @@
-import { getInput, setOutput, info, setFailed } from "@actions/core";
-import { exec, getExecOutput } from "@actions/exec";
-import { getOctokit, context } from "@actions/github";
-import { type PlannedRelease } from "@pnpm/releasing.versioning";
-import { z } from "zod";
+import { getInput, info, setFailed, setOutput } from "#shared/core.ts";
+import { exec, getExecOutput } from "#shared/exec.ts";
+import { listStagedFiles } from "#shared/git.ts";
+import { createGitHubClient, getRepository } from "#shared/github.ts";
+import { array, parse } from "#shared/schema.ts";
+
+import { PullRequestSchema, ReleasePlanSchema, UserSchema } from "./schemas.ts";
 
 /**
- * The structure of the JSON output produced by `pnpm version -r --json`.
- *
- * Each entry describes a package that pnpm plans to release, including its
- * current version and the version it will be updated to.
+ * Applies pending change intents with `pnpm version -r` and returns the
+ * packages pnpm plans to publish.
  */
-const ReleasePlanSchema = z.toZod<
-  Array<Pick<PlannedRelease, "name" | "newVersion" | "currentVersion">>
->()(
-  z.array(
-    z.object({
-      name: z.string(),
-      currentVersion: z.string(),
-      newVersion: z.string(),
-    }),
-  ),
-);
+function applyChangeIntents() {
+  const { stdout } = getExecOutput("pnpm", ["version", "-r", "--json"]);
+  return parse(
+    ReleasePlanSchema,
+    JSON.parse(stdout),
+    "`pnpm version -r --json`",
+  );
+}
 
 async function run() {
   const token = getInput("token", { required: true });
@@ -29,47 +26,28 @@ async function run() {
   const branch = getInput("branch", { required: true });
   const formatCommand = getInput("format-command");
 
-  const octokit = getOctokit(token);
-  const { owner, repo } = context.repo;
+  const github = createGitHubClient({ token, userAgent: "create-release-pr" });
+  const { owner, repo } = getRepository();
 
   const bot = `${appSlug}[bot]`;
-  const { data: botUser } = await octokit.rest.users.getByUsername({
-    username: bot,
-  });
-  await exec("git", ["config", "user.name", bot]);
-  await exec("git", [
+  const botUser = await github.request(
+    { method: "GET", path: `/users/${encodeURIComponent(bot)}` },
+    UserSchema,
+  );
+  exec("git", ["config", "user.name", bot]);
+  exec("git", [
     "config",
     "user.email",
     `${botUser.id}+${bot}@users.noreply.github.com`,
   ]);
 
-  /** Create the release branch or reset it if it already exists. */
-  await exec("git", ["switch", "-C", branch]);
+  exec("git", ["switch", "-C", branch]);
 
-  const { stdout: releasePlanOutput } = await getExecOutput("pnpm", [
-    "version",
-    "-r",
-    "--json",
-  ]);
-  const parsedReleasePlanOutput = ReleasePlanSchema.safeParse(
-    JSON.parse(releasePlanOutput),
-  );
-
-  if (!parsedReleasePlanOutput.success) {
-    throw new Error(
-      `\`pnpm version -r --json\` failed to produce a release plan:\n${z.prettifyError(parsedReleasePlanOutput.error)}`,
-    );
-  }
-
-  const releasePlan = parsedReleasePlanOutput.data;
+  const releasePlan = applyChangeIntents();
 
   /**
-   * If the release plan is empty, none of the pending changes require a version
-   * bump (for example, they may use `pnpm change --bump none`).
-   *
-   * There's nothing to release, so we don't need to create or update a release
-   * PR. The change files are left untouched on the base branch and can be
-   * handled by a future release PR.
+   * An empty plan means every pending change explicitly opted out of a release.
+   * Leave those intent files on the base branch for a future release PR.
    */
   if (releasePlan.length === 0) {
     info("No packages need to be released. Skipping release PR creation.");
@@ -77,14 +55,9 @@ async function run() {
   }
 
   /**
-   * Check if a previous release is still waiting to be published.
-   *
-   * Pnpm keeps the current version when a release hasn't been published to npm
-   * yet, even if it's already staged.
-   *
-   * Creating another release for the same version could cause publishing
-   * conflicts or include changes that aren't part of the original release. The
-   * previous release must be completed first.
+   * Pnpm keeps a package at its current version until that version is published
+   * on npm. Creating another release PR for the same version would mix new
+   * changes into the previous unpublished release.
    */
   const unreleased = releasePlan.filter(
     ({ currentVersion, newVersion }) => currentVersion === newVersion,
@@ -96,23 +69,27 @@ async function run() {
       .join(", ");
 
     throw new Error(
-      `${versions} isn't on npm yet, so this release PR would release it again. If it's staged, approve it with \`pnpm stage approve\`. If its release failed or never ran, re-run the release workflow run of the release PR merge. If the release PR was merged while change intents were pending, revert that merge instead. Then re-run this job`,
+      [
+        `${versions} isn't on npm yet, so this release PR would release it again.`,
+        `If it's staged, approve it with \`pnpm stage approve\`.`,
+        `If its release failed or never ran, re-run the release PR merge workflow.`,
+        `If the release PR was merged while change intents were pending,`,
+        `revert that merge instead. Then re-run this job.`,
+      ].join(" "),
     );
   }
 
-  await exec("git", ["add", "-A"]);
+  exec("git", ["add", "-A"]);
 
-  /** Format only the files pnpm modified or created */
+  /**
+   * Format exactly the files `pnpm version` staged, then stage formatter
+   * output.
+   */
   if (formatCommand !== "") {
-    const { stdout: changedFilesOutput } = await getExecOutput(
-      "git",
-      ["diff", "--staged", "--name-only", "--diff-filter=d", "-z"],
-      { silent: true },
-    );
-    const changedFiles = changedFilesOutput.split("\0").filter(Boolean);
+    const changedFiles = listStagedFiles();
 
     if (changedFiles.length > 0) {
-      await exec(formatCommand, changedFiles);
+      exec(formatCommand, changedFiles);
     }
   }
 
@@ -121,8 +98,8 @@ async function run() {
     .join(", ")}`;
 
   const body = [
-    "Merging this PR stages the following packages on npm and drafts their GitHub releases.",
-    "Nothing is public until the staged versions are approved (`pnpm stage approve`) and the drafts are published:",
+    "Merging this PR stages the following packages on npm.",
+    "Nothing is public until the staged versions are approved (`pnpm stage approve`), which also publishes their GitHub releases:",
     "",
     ...releasePlan.map(
       ({ name, currentVersion, newVersion }) =>
@@ -132,9 +109,9 @@ async function run() {
     `It is updated automatically when new change intents land on \`${base}\`.`,
   ].join("\n");
 
-  await exec("git", ["add", "-A"]);
-  await exec("git", ["commit", "-m", title]);
-  await exec(
+  exec("git", ["add", "-A"]);
+  exec("git", ["commit", "-m", title]);
+  exec(
     "git",
     [
       "remote",
@@ -144,37 +121,35 @@ async function run() {
     ],
     { silent: true },
   );
-  await exec("git", ["push", "--force", "origin", branch]);
+  exec("git", ["push", "--force", "origin", branch]);
 
-  const { data: pulls } = await octokit.rest.pulls.list({
-    owner,
-    repo,
-    head: `${owner}:${branch}`,
-    base,
-    state: "open",
-  });
-
-  const [existing] = pulls;
+  const pullsPath = `/repos/${owner}/${repo}/pulls` as const;
+  const [existing] = await github.request(
+    {
+      method: "GET",
+      path: pullsPath,
+      searchParams: { head: `${owner}:${branch}`, base, state: "open" },
+    },
+    array(PullRequestSchema),
+  );
 
   if (existing) {
-    await octokit.rest.pulls.update({
-      owner,
-      repo,
-      pull_number: existing.number,
-      title,
-      body,
+    await github.request({
+      method: "PATCH",
+      path: `${pullsPath}/${existing.number}`,
+      body: { title, body },
     });
     info(`Updated release PR ${existing.html_url}`);
     setOutput("pr-number", existing.number);
   } else {
-    const { data: created } = await octokit.rest.pulls.create({
-      owner,
-      repo,
-      head: branch,
-      base,
-      title,
-      body,
-    });
+    const created = await github.request(
+      {
+        method: "POST",
+        path: pullsPath,
+        body: { head: branch, base, title, body },
+      },
+      PullRequestSchema,
+    );
     info(`Opened release PR ${created.html_url}`);
     setOutput("pr-number", created.number);
   }

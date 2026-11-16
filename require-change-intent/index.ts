@@ -1,30 +1,29 @@
-import { info, setFailed } from "@actions/core";
-import { exec, getExecOutput } from "@actions/exec";
 import process from "node:process";
 
+import { info, setFailed } from "#shared/core.ts";
+import {
+  hasFileChanged,
+  isCommit,
+  listAddedFiles,
+  listFiles,
+} from "#shared/git.ts";
+
 /**
- * The checkout of a `pull_request` event is the merge commit of the pull
- * request, and HEAD^1 is the tip of the base branch. So HEAD^1..HEAD is what
- * the pull request changes
+ * Pull request checks run on the merge commit. `HEAD^1..HEAD` isolates what the
+ * pull request adds over the base branch.
  */
 const BASE = "HEAD^1";
 const HEAD = "HEAD";
+const LEDGER = ".changeset/ledger.yaml";
 
 /**
- * The merge commit of the release PR also has the intents that landed on the
- * base branch after the PR was built. Merged now, they would still be pending,
- * and the release workflow would open the next release PR instead of releasing
- * this one. The release workflow rebuilds the PR on every push that has pending
- * intents, so this passes again once it caught up. The intents are the Markdown
- * files directly in `.changeset/`, as `pnpm change` writes them
+ * A release PR is mergeable only after it applies every intent currently on the
+ * base branch. Otherwise, those intents would remain pending after merge, and
+ * the next workflow run would open another release PR instead of publishing.
  */
-async function requireNoPendingIntents() {
-  const { stdout } = await getExecOutput(
-    "git",
-    ["ls-tree", "--name-only", "-z", HEAD, ".changeset/"],
-    { silent: true },
-  );
-  const pending = stdout.split("\0").filter((file) => file.endsWith(".md"));
+function requireNoPendingIntents() {
+  const files = listFiles(HEAD, ".changeset/");
+  const pending = files.filter((file) => file.endsWith(".md"));
 
   if (pending.length > 0) {
     throw new Error(
@@ -33,7 +32,7 @@ async function requireNoPendingIntents() {
   }
 }
 
-async function run() {
+function run() {
   const eventName = process.env["GITHUB_EVENT_NAME"];
 
   if (eventName !== "pull_request") {
@@ -42,56 +41,23 @@ async function run() {
     );
   }
 
-  const baseExitCode = await exec(
-    "git",
-    ["rev-parse", "--verify", "--quiet", `${BASE}^{commit}`],
-    { silent: true, ignoreReturnCode: true },
-  );
-
-  if (baseExitCode !== 0) {
+  if (!isCommit(BASE)) {
     throw new Error(
       "The parent of the checked out commit is missing. Check out the merge commit of the pull request with `fetch-depth: 2`",
     );
   }
 
   /**
-   * The release PR applies the intents instead of adding one. It's the only
-   * pull request that changes the ledger, which is also how the release
-   * workflow recognizes it. `git diff --quiet` exits with 1 when there are
-   * changes, anything other than 0 and 1 is an error
+   * The release PR is the only PR allowed to change the ledger because it has
+   * already applied the intents.
    */
-  const ledgerExitCode = await exec(
-    "git",
-    ["diff", "--quiet", BASE, HEAD, "--", ".changeset/ledger.yaml"],
-    { ignoreReturnCode: true },
-  );
-
-  if (ledgerExitCode === 1) {
-    await requireNoPendingIntents();
+  if (hasFileChanged(BASE, HEAD, LEDGER)) {
+    requireNoPendingIntents();
     info("Release PR, no change intent needed");
     return;
   }
 
-  if (ledgerExitCode !== 0) {
-    throw new Error(`git diff failed with exit code ${ledgerExitCode}`);
-  }
-
-  const { stdout } = await getExecOutput(
-    "git",
-    [
-      "diff",
-      "--name-only",
-      "--diff-filter=A",
-      "-z",
-      BASE,
-      HEAD,
-      "--",
-      ".changeset/*.md",
-      ":!.changeset/README.md",
-    ],
-    { silent: true },
-  );
-  const added = stdout.split("\0").filter(Boolean);
+  const added = listAddedFiles(BASE, HEAD, [".changeset/*.md"]);
 
   if (added.length === 0) {
     throw new Error(
@@ -103,7 +69,7 @@ async function run() {
 }
 
 try {
-  await run();
+  run();
 } catch (error) {
   setFailed(error instanceof Error ? error.message : String(error));
 }

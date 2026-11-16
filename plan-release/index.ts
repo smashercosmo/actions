@@ -1,16 +1,20 @@
-import { info, setFailed, setOutput } from "@actions/core";
-import { exec, getExecOutput } from "@actions/exec";
 import fs from "node:fs";
 import process from "node:process";
+
+import { info, setFailed, setOutput } from "#shared/core.ts";
+import {
+  getEmptyTreeId,
+  hasFileChanged,
+  isCommit,
+  listFiles,
+} from "#shared/git.ts";
 
 const HEAD = "HEAD";
 const LEDGER = ".changeset/ledger.yaml";
 
 /**
- * Get the commit the branch pointed to before this push.
- *
- * GitHub includes this commit in the push event payload. Reading it directly
- * avoids importing Octokit just to access this information.
+ * Reads the pre-push commit from GitHub's event payload without pulling in a
+ * GitHub API client just for one field.
  */
 function readBefore() {
   const eventPath = process.env["GITHUB_EVENT_PATH"];
@@ -27,80 +31,35 @@ function readBefore() {
     : "";
 }
 
-async function isCommit(rev: string) {
-  const exitCode = await exec(
-    "git",
-    ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`],
-    { silent: true, ignoreReturnCode: true },
-  );
-
-  return exitCode === 0;
-}
-
 /**
- * Find the commit to compare against HEAD.
+ * Chooses the base commit for deciding what changed in this run.
  *
- * Normally, we compare against the commit the branch pointed to before the
- * push. This ensures we include changes from every commit in the push, not just
- * the last one.
- *
- * That commit may not be available after a force-push, and it doesn't exist for
- * new branches. Manual workflow runs don't provide it either.
- *
- * In those cases, fall back to the previous commit. If HEAD is the first commit
- * in the repository, use the empty Git tree instead.
+ * The event's `before` commit covers every commit in a push. Force-pushes, new
+ * branches, and manual runs may not have it locally, so fall back to `HEAD^` or
+ * the empty tree for the first commit.
  */
-async function resolveBase() {
+function resolveBase() {
   const before = readBefore();
 
-  if (before !== "" && (await isCommit(before))) {
+  if (before !== "" && isCommit(before)) {
     return before;
   }
 
-  if (await isCommit(`${HEAD}^`)) {
+  if (isCommit(`${HEAD}^`)) {
     return `${HEAD}^`;
   }
 
-  const { stdout } = await getExecOutput(
-    "git",
-    ["hash-object", "-t", "tree", "--stdin"],
-    { silent: true, input: Buffer.alloc(0) },
-  );
-
-  return stdout.trim();
-}
-
-async function listPendingIntents() {
-  const { stdout } = await getExecOutput(
-    "git",
-    ["ls-tree", "--name-only", "-z", HEAD, ".changeset/"],
-    { silent: true },
-  );
-
-  return stdout.split("\0").filter((file) => file.endsWith(".md"));
+  return getEmptyTreeId();
 }
 
 /**
- * Check whether this push changed the release ledger.
- *
- * `git diff --quiet` returns:
- *
- * - 0 if there are no changes.
- * - 1 if there are changes.
- * - Any other code if Git encountered an error.
+ * Pending release intents are the Markdown files `pnpm change` writes directly
+ * under `.changeset/`.
  */
-async function hasLedgerChanged(base: string) {
-  const exitCode = await exec(
-    "git",
-    ["diff", "--quiet", base, HEAD, "--", LEDGER],
-    { ignoreReturnCode: true },
-  );
+function listPendingIntents() {
+  const files = listFiles(HEAD, ".changeset/");
 
-  if (exitCode > 1) {
-    throw new Error(`git diff failed with exit code ${exitCode}`);
-  }
-
-  return exitCode === 1;
+  return files.filter((file) => file.endsWith(".md"));
 }
 
 /**
@@ -110,31 +69,32 @@ async function hasLedgerChanged(base: string) {
  * - `release`: Run the release workflow.
  * - `none`: Nothing needs to be done.
  *
- * A push never has both pending change intents and a release: the release PR
- * can only be merged once it applies every intent on the base branch. The
- * `require-change-intent` check enforces that, together with the "Require
- * branches to be up to date before merging" rule of the base branch.
+ * A push should never both open a release PR and publish a release. The release
+ * PR must already include every pending intent before it can merge.
  */
-async function plan() {
-  const pending = await listPendingIntents();
+function plan() {
+  const pending = listPendingIntents();
 
   if (pending.length > 0) {
     return "pr";
   }
 
   /**
-   * A manually triggered run always attempts a release when there are no
-   * pending change intents. This also allows retrying failed releases.
+   * Manual runs are the retry path for failed releases when no newer release PR
+   * is pending.
    */
   if (process.env["GITHUB_EVENT_NAME"] === "workflow_dispatch") {
     return "release";
   }
 
-  return (await hasLedgerChanged(await resolveBase())) ? "release" : "none";
+  /** The release ledger changes only when the release PR merges. */
+  const hasLedgerChanged = hasFileChanged(resolveBase(), HEAD, LEDGER);
+
+  return hasLedgerChanged ? "release" : "none";
 }
 
 try {
-  const action = await plan();
+  const action = plan();
   info(`Action: ${action}`);
   setOutput("action", action);
 } catch (error_) {
