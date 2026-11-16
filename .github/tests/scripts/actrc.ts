@@ -57,8 +57,8 @@ const RELEASE_BOT_PRIVATE_KEY = generateKeyPairSync("rsa", {
 }).privateKey;
 
 /**
- * Public actions must be fetched from github.com without the fake
- * token we use in tests.
+ * Public actions must be fetched from github.com without the fake token we use
+ * in tests.
  */
 const THIRD_PARTY_ACTIONS = ["actions/checkout", "pnpm/setup"];
 
@@ -86,8 +86,8 @@ function getAdditionalArgs({
     /** Let cached actions keep tests usable when the network is unavailable. */
     ["--action-offline-mode"],
     /**
-     * Public actions should be downloaded from github.com, not the mocked
-     * host configured for the consumer repository.
+     * Public actions should be downloaded from github.com, not the mocked host
+     * configured for the consumer repository.
      */
     ...THIRD_PARTY_ACTIONS.map((repository) => [
       "--replace-ghe-action-with-github-com",

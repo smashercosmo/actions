@@ -154,7 +154,7 @@ Example:
 | `token`            | yes      | GitHub token with `contents` write permission.                                                                                                                                   |
 | `include-private`  | no       | Also create releases for private packages that have a version. Defaults to `false`. Useful for repositories that use versioning and Git tags but do not publish packages to npm. |
 | `npm`              | no       | Create the release of a public package only once its version is on npm. Defaults to `false`. Private packages are never on npm, so they are released right away.                 |
-| `npm-wait-minutes` | no       | How long to wait for package versions to appear on npm, checking every 30 seconds. Defaults to `0`, which checks once. Only used when `npm` is enabled.                           |
+| `npm-wait-minutes` | no       | How long to wait for package versions to appear on npm, checking every 30 seconds. Defaults to `0`, which checks once. Only used when `npm` is enabled.                          |
 
 ### require-change-intent
 
