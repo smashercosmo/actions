@@ -1,0 +1,12 @@
+{
+  "name": "consumer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo 'consumer: build'",
+    "lint": "echo 'consumer: lint'",
+    "format": "echo 'consumer: format'",
+    "test": "echo 'consumer: test'"
+  },
+  "packageManager": "pnpm@12.11.2"
+}

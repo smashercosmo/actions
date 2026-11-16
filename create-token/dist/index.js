@@ -1003,6 +1003,7 @@ try {
 		pull_requests: getPermissionInput("permission-pull-requests")
 	};
 	const authentication = await createAppAuth({
+		/** Accepts the client ID as well, which GitHub recommends over the app ID */
 		appId: clientId,
 		privateKey
 	})({ type: "app" });
@@ -1010,6 +1011,7 @@ try {
 	const { data: installation } = await octokit.rest.apps.getRepoInstallation({ ...context.repo });
 	const { data } = await octokit.rest.apps.createInstallationAccessToken({
 		installation_id: installation.id,
+		/** Without it the token can access every repository of the installation. */
 		repositories: [context.repo.repo],
 		permissions
 	});

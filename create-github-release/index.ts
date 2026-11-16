@@ -11,12 +11,18 @@ import path from "node:path";
 import process from "node:process";
 import { z } from "zod";
 
-const WorkspacePackageSchema = z.object({
-  name: z.string(),
-  version: z.string().optional(),
-  path: z.string(),
-  private: z.boolean().default(false),
-});
+/**
+ * The structure of the JSON output produced by `pnpm ls -r --depth -1 --json`
+ * (https://github.com/pnpm/pnpm/blob/main/pnpm11/deps/inspection/list/src/types.ts).
+ */
+const WorkspacePackagesSchema = z.array(
+  z.object({
+    name: z.string(),
+    version: z.string().optional(),
+    path: z.string(),
+    private: z.boolean().default(false),
+  }),
+);
 
 const ReleaseSchema = z.object({
   tag_name: z.string(),
@@ -32,7 +38,62 @@ type RequestOptions<TSchema extends z.ZodType> =
       body: Readonly<Record<string, unknown>>;
     }>;
 
-const RELEASES_PER_PAGE = 100;
+/**
+ * GraphQL reports most errors (e.g. an unknown repository) with a 200 status
+ * and an `errors` array, so the status alone doesn't tell a success
+ */
+const GraphQLErrorSchema = z.object({ message: z.string() });
+
+const GraphQLResponseSchema = z.object({
+  data: z.unknown().optional(),
+  errors: z.array(GraphQLErrorSchema).optional(),
+});
+
+const ExistingReleaseRepositorySchema = z.object({
+  release: z.object({ isDraft: z.boolean(), url: z.url() }).nullable(),
+});
+
+const ExistingReleaseSchema = z.object({
+  repository: ExistingReleaseRepositorySchema,
+});
+
+/**
+ * Looks up an existing release by its tag, including drafts.
+ * The REST API's get-release-by-tag endpoint only returns published
+ * releases, but GitHub's GraphQL release(tagName:) also returns drafts
+ * (verified against GitHub.com, as this behavior isn't documented).
+ *
+ * This matters because creating a draft release doesn't create its git
+ * tag. As a result, multiple drafts can exist with the same tag.
+ * GraphQL returns one of them, which is enough for our purposes:
+ * we only need to know whether a release with this tag already exists.
+ */
+const EXISTING_RELEASE_QUERY = `
+  query ExistingRelease($owner: String!, $name: String!, $tag: String!) {
+    repository(owner: $owner, name: $name) {
+      release(tagName: $tag) {
+        isDraft
+        url
+      }
+    }
+  }
+`;
+
+function parse<TSchema extends z.ZodType>(
+  schema: TSchema,
+  data: unknown,
+  label: string,
+): z.infer<TSchema> {
+  const result = schema.safeParse(data);
+
+  if (!result.success) {
+    throw new Error(
+      `${label} returned an unexpected response:\n${z.prettifyError(result.error)}`,
+    );
+  }
+
+  return result.data;
+}
 
 function getEnv(name: string) {
   const value = process.env[name];
@@ -44,21 +105,30 @@ function getEnv(name: string) {
   return value;
 }
 
-/** Minimal GitHub REST API client for the current repository */
+/**
+ * A small GitHub API client for making authenticated requests, with `request`
+ * for the REST API and `query` for the GraphQL API
+ */
 function createGitHubClient(token: string) {
   const apiUrl = process.env["GITHUB_API_URL"] ?? "https://api.github.com";
+  const graphqlUrl =
+    process.env["GITHUB_GRAPHQL_URL"] ?? "https://api.github.com/graphql";
   const repository = getEnv("GITHUB_REPOSITORY");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "User-Agent": "create-github-release",
+  };
 
-  return async function request<TSchema extends z.ZodType>(
+  async function request<TSchema extends z.ZodType>(
     options: RequestOptions<TSchema>,
   ): Promise<z.infer<TSchema>> {
     const { method, endpoint, schema } = options;
+    const label = `GitHub API ${method} ${endpoint}`;
     const response = await fetch(`${apiUrl}/repos/${repository}${endpoint}`, {
       method,
       headers: {
+        ...headers,
         Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${token}`,
-        "User-Agent": "create-github-release",
         "X-GitHub-Api-Version": "2022-11-28",
         ...(options.method === "POST"
           ? { "Content-Type": "application/json" }
@@ -71,25 +141,64 @@ function createGitHubClient(token: string) {
 
     if (!response.ok) {
       throw new Error(
-        `GitHub API ${method} ${endpoint} failed with ${response.status}: ${await response.text()}`,
+        `${label} failed with ${response.status}: ${await response.text()}`,
       );
     }
 
-    const result = schema.safeParse(await response.json());
+    return parse(schema, await response.json(), label);
+  }
 
-    if (!result.success) {
+  async function query<TSchema extends z.ZodType>(
+    document: string,
+    variables: Readonly<Record<string, unknown>>,
+    schema: TSchema,
+  ): Promise<z.infer<TSchema>> {
+    const [owner, name] = repository.split("/");
+    const label = "GitHub GraphQL API";
+    const response = await fetch(graphqlUrl, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: document,
+        variables: { owner, name, ...variables },
+      }),
+    });
+
+    if (!response.ok) {
       throw new Error(
-        `GitHub API ${method} ${endpoint} returned an unexpected response:\n${z.prettifyError(result.error)}`,
+        `${label} failed with ${response.status}: ${await response.text()}`,
       );
     }
 
-    return result.data;
-  };
+    const { data, errors } = parse(
+      GraphQLResponseSchema,
+      await response.json(),
+      label,
+    );
+
+    if (errors !== undefined && errors.length > 0) {
+      throw new Error(
+        `${label} failed: ${errors.map(({ message }) => message).join("; ")}`,
+      );
+    }
+
+    return parse(schema, data, label);
+  }
+
+  return { request, query };
 }
 
 /**
- * Returns the section from "## <version>" (or "## [<version>] - <date>") up to
- * the next "## " heading
+ * Extracts the release notes for a specific version from CHANGELOG.md.
+ *
+ * Looks for a heading such as:
+ *
+ * ## 1.2.0
+ *
+ * ## [1.2.0] - 2026-01-15
+ *
+ * Returns everything below that heading, up to the next version heading.
+ * Returns an empty string if the version isn't found.
  */
 function getReleaseNotes(changelog: string, version: string) {
   const notes: string[] = [];
@@ -112,35 +221,11 @@ function getReleaseNotes(changelog: string, version: string) {
 }
 
 /**
- * Includes drafts, which, unlike published releases, may share a tag. The
- * get-release-by-tag endpoint doesn't return drafts, hence the full list. Pages
- * are fetched one after another, as the total count isn't known upfront
- */
-async function getExistingTags(
-  request: ReturnType<typeof createGitHubClient>,
-  page = 1,
-  tags: readonly string[] = [],
-): Promise<readonly string[]> {
-  const releases = await request({
-    method: "GET",
-    endpoint: `/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`,
-    schema: z.array(ReleaseSchema),
-  });
-  const collected = [...tags, ...releases.map((release) => release.tag_name)];
-
-  return releases.length < RELEASES_PER_PAGE
-    ? collected
-    : getExistingTags(request, page + 1, collected);
-}
-
-/**
- * The commit that set the package's current version: the last one that added or
- * removed the `"version": "<version>"` line of its package.json.
- *
- * That's the commit to tag. The commit the workflow runs on can be a later one,
- * e.g. when a failed release is retried by hand after more commits have landed
- * on main. Falls back to the workflow's commit when the history has no answer,
- * e.g. in a shallow clone.
+ * Finds the commit that introduced the package's current version by looking for
+ * the last commit that changed the `"version": "<version>"` line in
+ * package.json. Git's `-S` option matches both additions and removals. However,
+ * since the version line is present in the current version of package.json, the
+ * most recent matching commit must be the one that introduced it.
  */
 async function getVersionCommit(
   packagePath: string,
@@ -173,7 +258,6 @@ async function getVersionCommit(
 
 try {
   const token = getInput("token", { required: true });
-  const draft = getBooleanInput("draft");
   const includePrivate = getBooleanInput("include-private");
   const sha = getEnv("GITHUB_SHA");
 
@@ -182,14 +266,17 @@ try {
     ["ls", "-r", "--depth", "-1", "--json"],
     { silent: true },
   );
-  const workspacePackages = z
-    .array(WorkspacePackageSchema)
-    .parse(JSON.parse(workspacePackagesOutput));
+  const workspacePackages = WorkspacePackagesSchema.parse(
+    JSON.parse(workspacePackagesOutput),
+  );
 
   /**
-   * Packages without a version are never released, e.g. the root of a
-   * workspace. Private ones only when asked for: they aren't published to npm,
-   * but a repository can still be versioned and tagged
+   * Only packages with a version can be released. This excludes packages such
+   * as the workspace root, which usually don't have their own version.
+   *
+   * Private packages are excluded by default because they aren't published to
+   * npm. Set include-private to true if you also want to create GitHub releases
+   * and tags for them.
    */
   const releasablePackages = workspacePackages.flatMap(
     ({ name, version, path: packagePath, private: isPrivate }) =>
@@ -199,9 +286,19 @@ try {
   );
 
   /**
-   * Tags are "v<version>", which is only unique with one released package. More
-   * packages need "<name>@<version>" tags, which would break the existing tag
-   * history, so fail instead of creating clashing tags
+   * We use "v<version>" as the release tag (for example, "v1.2.0").
+   *
+   * This naming scheme only works when releasing one package, because two
+   * packages could have the same version and would then need the same tag.
+   *
+   * We could use package-specific tags such as "package-name@1.2.0", but that
+   * would introduce a different naming convention and break consistency with
+   * the existing release tags.
+   *
+   * Rather than risk creating conflicting tags, fail if multiple packages are
+   * eligible for release.
+   *
+   * TODO support multi-package releases in the future
    */
   if (releasablePackages.length > 1) {
     throw new Error(
@@ -209,25 +306,28 @@ try {
     );
   }
 
-  const request = createGitHubClient(token);
-
-  const existingTags = new Set(await getExistingTags(request));
-
-  const packagesToRelease = releasablePackages.flatMap(
-    ({ name, version, packagePath }) => {
-      const tag = `v${version}`;
-
-      if (existingTags.has(tag)) {
-        info(`Release ${tag} already exists, skipping`);
-        return [];
-      }
-
-      return [{ name, version, packagePath, tag }];
-    },
-  );
+  const { request, query } = createGitHubClient(token);
 
   await Promise.all(
-    packagesToRelease.map(async ({ name, version, packagePath, tag }) => {
+    releasablePackages.map(async ({ name, version, packagePath }) => {
+      const tag = `v${version}`;
+
+      /**
+       * The release may exist already, e.g. when the workflow is run manually
+       * to retry a failed release. Creating it again would leave a duplicate
+       * draft.
+       */
+      const {
+        repository: { release: existingRelease },
+      } = await query(EXISTING_RELEASE_QUERY, { tag }, ExistingReleaseSchema);
+
+      if (existingRelease !== null) {
+        info(
+          `Release ${tag} already exists${existingRelease.isDraft ? " as a draft" : ""}, skipping: ${existingRelease.url}`,
+        );
+        return;
+      }
+
       let notes = getReleaseNotes(
         fs.readFileSync(path.join(packagePath, "CHANGELOG.md"), "utf8"),
         version,
@@ -241,8 +341,8 @@ try {
       const commit = await getVersionCommit(packagePath, version, sha);
 
       /**
-       * Creates the tag as well, pointing to the released commit. For a draft,
-       * the tag is created once the draft is published
+       * The tag is created once the draft is published, pointing to the
+       * released commit
        */
       const release = await request({
         method: "POST",
@@ -253,11 +353,11 @@ try {
           target_commitish: commit,
           name: tag,
           body: notes,
-          draft,
+          draft: true,
         },
       });
 
-      info(`Created ${draft ? "draft " : ""}release ${release.html_url}`);
+      info(`Created draft release ${release.html_url}`);
     }),
   );
 } catch (error) {

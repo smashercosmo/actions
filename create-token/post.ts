@@ -3,7 +3,6 @@ import { getOctokit } from "@actions/github";
 
 const token = getState("token");
 
-// The main step failed before creating a token
 if (token) {
   try {
     const octokit = getOctokit(token);

@@ -1,36 +1,40 @@
-# actions
+# Actions
 
-GitHub Actions for releasing pnpm workspaces: a release PR built from pending
-change intents, draft GitHub releases built from the changelogs, the GitHub App
-token both of them need, and a check that every pull request adds an intent.
+GitHub Actions for releasing pnpm workspaces.
 
-| Action                                             | Description                                                                       |
-| -------------------------------------------------- | --------------------------------------------------------------------------------- |
-| [`create-token`](./create-token)                   | Creates a GitHub App installation token and revokes it when the job ends.         |
-| [`create-release-pr`](./create-release-pr)         | Applies pending change intents and opens or updates a release PR.                 |
-| [`create-github-release`](./create-github-release) | Creates a GitHub release from `CHANGELOG.md` for every unreleased public package. |
-| [`require-change-intent`](./require-change-intent) | Fails a pull request that doesn't add a change intent.                            |
+This repository provides reusable actions and workflows for managing releases. They turn pending change intents into a release PR, create GitHub releases from package changelogs, generate the GitHub App tokens needed by the release process, and ensure that every pull request includes a change intent.
 
-And reusable workflows that put them together:
+## Available actions
 
-| Workflow                                         | Description                                                                      |
-| ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| [`ci.yml`](./.github/workflows/ci.yml)           | Requires a change intent, then builds, lints, checks the formatting and tests.   |
-| [`release.yml`](./.github/workflows/release.yml) | Opens the release PR, then stages the packages on npm and drafts their releases. |
+| Action | Description |
+|---|---|
+| [`create-token`](./create-token) | Creates a GitHub App installation token and automatically revokes it when the job finishes. |
+| [`create-release-pr`](./create-release-pr) | Applies pending change intents and opens or updates a release PR. |
+| [`create-github-release`](./create-github-release) | Creates a GitHub release for each unreleased public package, using its `CHANGELOG.md`. |
+| [`require-change-intent`](./require-change-intent) | Fails a pull request if it does not include a change intent. |
+
+The repository also provides reusable workflows that combine these actions:
+
+| Workflow | Description |
+|---|---|
+| [`ci.yml`](./.github/workflows/ci.yml) | Checks that pull requests include a change intent, then builds, lints, checks formatting, and runs tests. |
+| [`release.yml`](./.github/workflows/release.yml) | Creates or updates the release PR, then stages packages on npm and creates draft GitHub releases after the release PR is merged. |
 
 ## Usage
 
-Pin the actions and workflows to the commit hash of a
-[release](https://github.com/smashercosmo/actions/releases), not to a branch
-or a tag: the hash is the only reference that can't be moved to other code
-later. Dependabot's
-`github-actions` ecosystem keeps the hashes up to date.
+Always pin actions and reusable workflows to the commit hash of a [release](https://github.com/smashercosmo/actions/releases), rather than to a branch or tag.
+
+A commit hash identifies an exact version of the code and cannot be moved to point to different code later. This makes it a reliable reference for workflows.
+
+Dependabot's `github-actions` ecosystem keeps these pinned commit hashes up to date.
 
 ### create-token
 
-Creates an installation token of a GitHub App for the repository the workflow
-runs in, limited to that repository and to the permissions asked for. The token
-is masked in the logs and revoked in the action's post step.
+Creates a GitHub App installation token for the repository where the workflow is running.
+
+The token is restricted to that repository and receives only the permissions requested by the action. It is automatically masked in workflow logs and revoked when the action's post step runs.
+
+Example:
 
 ```yaml
 - id: app-token
@@ -42,29 +46,54 @@ is masked in the logs and revoked in the action's post step.
     permission-pull-requests: write
 ```
 
-| Input                      | Required | Description                             |
-| -------------------------- | -------- | --------------------------------------- |
-| `client-id`                | yes      | Client ID of the GitHub App.            |
-| `private-key`              | yes      | Private key of the GitHub App.          |
-| `permission-contents`      | no       | `read` or `write`. `read` when not set. |
-| `permission-pull-requests` | no       | `read` or `write`. `read` when not set. |
+**Inputs**
 
-| Output     | Description                    |
-| ---------- | ------------------------------ |
-| `token`    | The installation access token. |
-| `app-slug` | Slug of the GitHub App.        |
+| Input | Required | Description |
+|---|---|---|
+| `client-id` | yes | Client ID of the GitHub App. |
+| `private-key` | yes | Private key of the GitHub App. |
+| `permission-contents` | no | Permission for repository contents: `read` or `write`. Defaults to `read`. |
+| `permission-pull-requests` | no | Permission for pull requests: `read` or `write`. Defaults to `read`. |
+
+**Outputs**
+
+| Output | Description |
+|---|---|
+| `token` | GitHub App installation access token. |
+| `app-slug` | Slug of the GitHub App. |
 
 ### create-release-pr
 
-Runs `pnpm version -r`, which applies the pending change intents: it bumps the
-versions, writes the changelogs and removes the intents. The result is
-committed as the GitHub App's bot user, force-pushed to the release branch and
-opened as a pull request, or the open one is updated. Does nothing when the
-pending intents only decline a release (`pnpm change --bump none`).
+Applies all pending change intents by running `pnpm version -r`.
 
-The repository has to be checked out, and pnpm and the dependencies installed,
-before the action runs. Use a GitHub App token, as pull requests opened with
-`GITHUB_TOKEN` don't trigger other workflows.
+This updates package versions, generates or updates their changelogs, and removes the processed change intents.
+
+The resulting changes are committed using the GitHub App's bot identity and pushed to the release branch. The action then opens a release PR or updates the existing one.
+
+If all pending change intents explicitly decline a release (`pnpm change --bump none`), no release PR is created.
+
+**Important:** The action refuses to push anything if a public package's current version has not yet been published to npm. A staged version does not count as published.
+
+This check prevents `pnpm version` from keeping the existing version and accidentally releasing it a second time.
+
+To resolve this, either:
+
+- Approve the staged version so that it can be published.
+- Publish it first by re-running the workflow run triggered when the previous release PR was merged.
+
+After the version has been published, run the action again.
+
+**Requirements**
+
+Before running this action:
+
+- The repository must be checked out.
+- pnpm must be installed.
+- Project dependencies must be installed.
+
+Use a GitHub App installation token rather than `GITHUB_TOKEN`. Pull requests created using `GITHUB_TOKEN` do not trigger other GitHub Actions workflows.
+
+Example:
 
 ```yaml
 - uses: smashercosmo/actions/create-release-pr@<commit hash>
@@ -74,52 +103,77 @@ before the action runs. Use a GitHub App token, as pull requests opened with
     format-command: pnpm exec oxfmt
 ```
 
-| Input            | Required | Description                                                                                                                             |
-| ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `token`          | yes      | GitHub App installation token with `contents` and `pull-requests` write permissions.                                                    |
-| `app-slug`       | yes      | Slug of the GitHub App, used as the commit author.                                                                                      |
-| `base`           | no       | Branch the release PR targets. `main` by default.                                                                                       |
-| `branch`         | no       | Branch the release PR is opened from, `release` by default. Force-pushed on every run, so it must not be used for anything else.        |
-| `format-command` | no       | Command that formats the files `pnpm version` changed. The files are appended to it as arguments. Nothing is formatted when it's empty. |
+**Inputs**
 
-| Output      | Description                                                                |
-| ----------- | -------------------------------------------------------------------------- |
-| `pr-number` | Number of the opened or updated release PR. Not set when no PR was needed. |
+| Input | Required | Description |
+|---|---|---|
+| `token` | yes | GitHub App installation token with `contents` and `pull-requests` write permissions. |
+| `app-slug` | yes | Slug of the GitHub App. Used as the author of the generated commit. |
+| `base` | no | Branch the release PR targets. Defaults to `main`. |
+| `branch` | no | Branch used for the release PR. Defaults to `release`. This branch is force-pushed on every run, so do not use it for anything else. |
+| `format-command` | no | Command used to format the files changed by `pnpm version`. The changed file paths are appended to the command as arguments. If empty, no formatting is performed. |
+
+**Outputs**
+
+| Output | Description |
+|---|---|
+| `pr-number` | Number of the opened or updated release PR. Not set if no release PR was needed. |
 
 ### create-github-release
 
-Creates a `v<version>` release for the public package of the workspace, unless
-a release with that tag, draft or not, already exists. The release notes are
-the section of that version in the package's `CHANGELOG.md`, and the tag points
-to the commit that set the version in its `package.json`.
+Creates a draft GitHub release for each eligible package in the workspace.
 
-The repository has to be checked out with its full history (`fetch-depth: 0`),
-and pnpm has to be installed. Fails for a workspace with more than one package to
-release, as `v<version>` tags would clash there.
+Each release is named `v<version>`, and its release notes are taken from the section of that package's `CHANGELOG.md` corresponding to the released version.
+
+A release is created only if one with the same tag does not already exist. This check includes both published releases and existing drafts.
+
+When a draft is published, GitHub creates the corresponding Git tag. The tag points to the commit where that package version was set in its `package.json`.
+
+**Requirements**
+
+- The repository must be checked out with its complete Git history (`fetch-depth: 0`). The action uses the history to find the commit that introduced each package version.
+- pnpm must be installed.
+- The workspace must not contain more than one package that needs a release. All releases use the tag format `v<version>`, so multiple packages with the same tag would conflict.
+
+Example:
 
 ```yaml
 - uses: smashercosmo/actions/create-github-release@<commit hash>
   with:
     token: ${{ github.token }}
-    draft: true
 ```
 
-| Input             | Required | Description                                                                                                                                      |
-| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `token`           | yes      | GitHub token with `contents` write permission.                                                                                                   |
-| `draft`           | no       | Create draft releases, `false` by default. The tag is created once a draft is published.                                                         |
-| `include-private` | no       | Also release private packages that have a version, `false` by default. For a repository that is versioned and tagged but never published to npm. |
+**Inputs**
+
+| Input | Required | Description |
+|---|---|---|
+| `token` | yes | GitHub token with `contents` write permission. |
+| `include-private` | no | Also create releases for private packages that have a version. Defaults to `false`. Useful for repositories that use versioning and Git tags but do not publish packages to npm. |
 
 ### require-change-intent
 
-Fails when the pull request doesn't add a change intent to `.changeset/`
-(`pnpm change`, or `pnpm change --bump none` for a change that needs no
-release). The release PR passes without one: it's the only pull request that
-changes `.changeset/ledger.yaml`.
+Checks that a pull request adds a change intent to `.changeset/`.
 
-Runs on `pull_request` events only, with the merge commit of the pull request
-checked out with `fetch-depth: 2`, which is the default checkout of the event
-plus its parents. Make it a required status check of the base branch.
+A change intent is created using `pnpm change`. If a change does not require a release, use `pnpm change --bump none`.
+
+The release PR is exempt from this requirement because it is the only pull request that modifies `.changeset/ledger.yaml`.
+
+The action also checks that the release PR includes all change intents currently present on the base branch.
+
+For example, if a new change intent is merged into `main` after the release PR was created, the release PR no longer includes all pending changes. The check fails until `release.yml` updates the PR on the next push.
+
+**Important:** The main branch ruleset must enable **Require branches to be up to date before merging**.
+
+Without this setting, the release PR could be merged using an earlier successful check, even though new change intents have since been added to the base branch. In that case, the release workflow would not release those changes.
+
+**Requirements**
+
+- The action runs only on `pull_request` events.
+- The workflow must check out the pull request's merge commit.
+- The checkout must include the merge commit and its parent commits. Use `fetch-depth: 2`, which is the required checkout depth for this action.
+- Add the action as a required status check for the base branch.
+
+Example:
 
 ```yaml
 - uses: actions/checkout@<commit hash>
@@ -132,14 +186,33 @@ plus its parents. Make it a required status check of the base branch.
 
 ### ci.yml
 
-A `changeset` job that runs `require-change-intent` on pull requests (except
-Dependabot's), and a `check` job that runs `pnpm change status`, `pnpm build`,
-`pnpm lint`, `pnpm format --check` and `pnpm test`, if the workspace has a
-`test` script. The build must not change or add any file that isn't ignored,
-e.g. committed build output that is out of date.
+A reusable CI workflow with two jobs:
 
-Sets its own concurrency group: one run per pull request, a new push cancels
-the old run. The calling workflow must not set one.
+**`changeset`**
+
+Runs `require-change-intent` on pull requests, except those created by Dependabot.
+
+**`check`**
+
+Runs the following checks:
+
+- `pnpm change status`
+- `pnpm build`
+- `pnpm lint`
+- `pnpm format --check`
+- `pnpm test`, if the workspace defines a `test` script.
+
+The build must not modify or create files that are not ignored by Git. For example, committed build output must already be up to date.
+
+**Concurrency**
+
+The workflow defines its own concurrency group. Each pull request can have only one CI run executing at a time.
+
+When a new commit is pushed to a pull request, its new CI run cancels the previous run for that pull request. This avoids wasting time on checks for outdated code.
+
+The calling workflow must not define its own concurrency group, as the reusable workflow already handles concurrency.
+
+Example calling workflow:
 
 ```yaml
 name: CI
@@ -157,29 +230,46 @@ jobs:
       contents: read
     uses: smashercosmo/actions/.github/workflows/ci.yml@<commit hash>
     with:
-      cache: true
       playwright-browsers: chromium webkit firefox
 ```
 
-| Input                 | Required | Description                                                                                                                                                                     |
-| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cache`               | no       | Cache the pnpm store and the Playwright browsers between runs, `false` by default.                                                                                              |
-| `playwright-browsers` | no       | Playwright browsers to install before the tests, separated by spaces. Installed with the Playwright version of the first workspace package that depends on it. None by default. |
+**Inputs**
 
-The checks report as `ci / changeset` and `ci / check` (the calling job, then
-the job of the workflow). Use these names for the required status checks of
-the main branch ruleset.
+| Input | Required | Description |
+|---|---|---|
+| `playwright-browsers` | no | Space-separated list of Playwright browsers to install before running tests. Uses the Playwright version from the first workspace package that depends on it. No browsers are installed by default. |
+
+**Required status checks**
+
+The workflow reports two status checks:
+
+- `ci / changeset`
+- `ci / check`
+
+The first part is the calling job name, and the second part is the job name inside the reusable workflow.
+
+Use both names as required status checks in the main branch ruleset.
 
 ### release.yml
 
-On every push to main:
+A reusable workflow that handles the release process.
 
-- pending change intents → opens or updates the release PR with
-  `create-release-pr`, formatted with `pnpm format`.
-- the release PR was just merged, or the workflow was run manually → with
-  `npm: true`, runs `ci.yml` on the commit, builds `./packages/*` and stages
-  them on npm with `pnpm stage publish -r`. Then drafts the GitHub releases
-  with `create-github-release`.
+It is intended to run on every push to `main`. Depending on the changes, it either creates or updates a release PR, prepares a release after that PR is merged, or does nothing.
+
+**What happens on each push to `main`**
+
+- **Pending change intents exist:** Opens or updates the release PR using `create-release-pr`. The changed files are formatted with `pnpm format`.
+- **A release PR was just merged, or the workflow was started manually:** When `npm: true`, runs `ci.yml` against the commit being released, builds the packages in `./packages/*`, and stages them on npm using `pnpm stage publish -r`. It then creates draft GitHub releases using `create-github-release`.
+
+Publishing the GitHub release draft creates the corresponding Git tag.
+
+**Important: Do not merge the release PR while pending change intents are present.**
+
+If new change intents are added before the release PR is merged, the workflow will create or update the next release PR instead of preparing the release that was just merged.
+
+The main branch ruleset must prevent this situation. Require the `ci / changeset` status check and enable **Require branches to be up to date before merging**.
+
+Example calling workflow:
 
 ```yaml
 name: Release
@@ -204,82 +294,177 @@ jobs:
       app-private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
 ```
 
-The calling job sets the most the jobs of the workflow can get, and every job
-asks only for what it needs. Allow `id-token: write` even without `npm`:
-GitHub checks the permissions of every job when the run starts, skipped ones
-included.
+**Concurrency**
 
-The repository needs a `release` environment that has the GitHub App's private
-key. With `npm`, the npm trusted publisher of every package names the calling
-workflow (e.g. `release.yml`), not this one, and the `release` environment.
+The calling workflow defines its own concurrency group. Only one release workflow run executes at a time, while other runs wait for their turn instead of cancelling the currently running run.
 
-The GitHub App's client ID has to be a repository or organization variable,
-not a variable of the `release` environment: the calling job reads it, and a
-job that calls a reusable workflow can't have an environment. The private key
-can be a secret of the environment, as secrets passed by name are resolved in
-the job of the workflow that sets the environment.
+The calling workflow must not define an additional concurrency group inside the reusable workflow's caller job configuration.
 
-| Input                 | Required | Description                                                                          |
-| --------------------- | -------- | ------------------------------------------------------------------------------------ |
-| `app-client-id`       | yes      | Client ID of the GitHub App that opens the release PR.                               |
-| `npm`                 | no       | Stage the packages on npm, after running `ci.yml` on the commit. `false` by default. |
-| `include-private`     | no       | Also draft releases for private packages that have a version, `false` by default.    |
-| `cache`               | no       | Cache the pnpm store between runs, `false` by default. Passed on to `ci.yml`.        |
-| `playwright-browsers` | no       | Passed on to `ci.yml`, see there. Only used with `npm`.                              |
+**Permissions**
 
-| Secret            | Required | Description                                              |
-| ----------------- | -------- | -------------------------------------------------------- |
-| `app-private-key` | yes      | Private key of the GitHub App that opens the release PR. |
+The calling job defines the maximum permissions that jobs inside the reusable workflow can receive. Each individual job then requests only the permissions it needs.
+
+Allow `id-token: write` even when `npm` is disabled. GitHub checks the permissions of every job when the workflow run starts, including jobs that will later be skipped.
+
+**GitHub App and npm configuration**
+
+The calling repository must have a GitHub environment named `release`. This environment must contain the GitHub App's private key.
+
+When `npm` is enabled, configure the npm trusted publisher for every package to reference:
+
+- The calling workflow's filename (for example, `release.yml`), not the filename of this reusable workflow.
+- The `release` environment.
+
+**GitHub App configuration**
+
+The GitHub App's client ID must be stored as a repository or organization variable, not as a variable in the `release` environment.
+
+The calling job reads this variable, but a job that calls a reusable workflow cannot define its own environment.
+
+The private key can be stored as a secret in the `release` environment. Secrets passed by name are resolved in the job that defines the environment, so the reusable workflow can access the environment's private key.
+
+**Inputs**
+
+| Input | Required | Description |
+|---|---|---|
+| `app-client-id` | yes | Client ID of the GitHub App used to open the release PR. |
+| `npm` | no | Whether to run CI and stage packages on npm before creating GitHub release drafts. Defaults to `false`. |
+| `include-private` | no | Whether to also create draft releases for private packages that have a version. Defaults to `false`. |
+| `playwright-browsers` | no | Playwright browsers passed to `ci.yml`. See the CI workflow documentation. Only used when `npm` is enabled. |
+
+**Secrets**
+
+| Secret | Required | Description |
+|---|---|---|
+| `app-private-key` | yes | Private key of the GitHub App used to open the release PR. |
 
 ## Development
 
-Requirements: pnpm (see `packageManager` in `package.json` for the exact
-version). pnpm installs the Node.js version from `devEngines.runtime` itself.
+**Requirements**
+
+- pnpm. See the `packageManager` field in `package.json` for the exact version.
+- Node.js is installed automatically by pnpm using the version specified in `devEngines.runtime`.
+
+Install dependencies:
 
 ```bash
-# Install dependencies
 pnpm install
+```
 
-# Bundle every action into its dist folder
+Build all actions:
+
+```bash
 pnpm build
+```
 
-# Lint and type-check
+Run linting and type checks:
+
+```bash
 pnpm lint
+```
 
-# Format the code
+Format the code:
+
+```bash
 pnpm format
 ```
 
-GitHub runs an action straight from this repository, without installing
-anything. So every action is bundled together with its dependencies into its
-own `dist` folder, and those folders are committed. Run `pnpm build` after
-changing the sources or the dependencies and commit the result with the
-change: CI fails when `dist` doesn't match the sources.
+GitHub runs actions directly from this repository without installing their dependencies.
 
-To add an action, create a folder with its `action.yml` and sources, and add
-its entry files to `tsdown.config.ts`.
+For this reason, every action and its dependencies must be bundled into its own `dist` directory. These directories are committed to the repository alongside the source code.
+
+Whenever you change an action's source code or dependencies, run `pnpm build` and commit the updated `dist` files.
+
+CI checks that the committed `dist` files match the source code. If they are out of date, CI fails.
+
+To add a new action:
+
+1. Create a directory containing its `action.yml` and source files.
+2. Add its entry files to `tsdown.config.ts`.
+
+### Tests
+
+Run the action tests:
+
+```bash
+pnpm test:act
+```
+
+The tests in `.github/tests` execute the reusable workflows, including the actions they call, locally using [act](https://github.com/nektos/act) and [act-test-runner](https://github.com/pshevche/act-test-runner).
+
+**Requirements**
+
+- Docker
+- `act` available on `PATH`
+- An active network connection
+
+The tests need network access because the jobs download pnpm. On the first run, they also download the `catthehacker/ubuntu:act-latest` image and the third-party actions used by the workflows.
+
+**How the tests work**
+
+Each test runs against a simulated consumer repository that exists only on your machine.
+
+The test environment consists of:
+
+- A consumer repository copied from `.github/tests/fixtures/consumer`, together with a bare Git repository that acts as its remote on github.com.
+- A simulated GitHub API that implements the endpoints used by the actions and keeps track of the pull requests and releases they create.
+- A local npm registry powered by [Verdaccio](https://www.verdaccio.org), with npm staging enabled.
+
+The workflows are executed in the same way a consumer repository would call them.
+
+`act` does not understand the `$/` references used by this repository. To work around this, the tests create a copy of the working tree where each `$/<path>` reference is replaced with `smashercosmo/actions/<path>@local`.
+
+`act` resolves these references to the local copy, allowing the tests to run the actual workflow and action implementations without publishing them first.
+
+To see the full output from `act`, set:
+
+```bash
+ACT_TESTS_VERBOSE=1
+```
+
+`act-test-runner` is installed from the tarball:
+
+```text
+.github/act-test-runner-2.0.0.tgz
+```
 
 ## Releases
 
-Every pull request has to add a change intent to `.changeset/`:
+Every pull request must include a change intent in `.changeset/`.
+
+Create a change intent describing the change and the required version bump:
 
 ```bash
-# Describes the change and how it bumps the version
 pnpm change
+```
 
-# For a change that needs no release
+For a change that does not require a release:
+
+```bash
 pnpm change --bump none
 ```
 
-The release workflow turns the pending intents into a release PR with the new
-version and the changelog. Merging it drafts a GitHub release, and publishing
-the draft creates the `v<version>` tag. Nothing is published to npm: pin the
-actions to the commit hash of a release.
+The release workflow collects pending change intents and creates a release PR containing the updated package versions and changelogs.
 
-The workflow needs a GitHub App that is installed on this repository with
-`contents` and `pull-requests` write permissions, and a `release` environment
-with the app's client ID in the `RELEASE_BOT_CLIENT_ID` variable and its
-private key in the `RELEASE_BOT_PRIVATE_KEY` secret.
+When the release PR is merged, the workflow creates draft GitHub releases for the affected packages.
+
+Publishing a draft creates its corresponding `v<version>` Git tag.
+
+**Nothing is published to npm by this repository's own release process.** Pin the actions and reusable workflows to the commit hash of a release.
+
+**GitHub App setup**
+
+The workflow requires a GitHub App installed on the repository with:
+
+- `contents` write permission.
+- `pull-requests` write permission.
+
+The repository must also have a GitHub environment named `release` configured with:
+
+| Setting | Value |
+|---|---|
+| Variable | `RELEASE_BOT_CLIENT_ID` — the GitHub App's client ID. |
+| Secret | `RELEASE_BOT_PRIVATE_KEY` — the GitHub App's private key. |
 
 ## License
 

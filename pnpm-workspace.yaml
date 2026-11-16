@@ -3,6 +3,4 @@ saveExact: true
 
 versioning:
   changelog:
-    # Keep CHANGELOG.md committed; the release workflow builds GitHub release
-    # notes from it
     storage: repository

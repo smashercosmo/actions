@@ -17079,6 +17079,25 @@ function info(message) {
 */
 const BASE = "HEAD^1";
 const HEAD = "HEAD";
+/**
+* The merge commit of the release PR also has the intents that landed on the
+* base branch after the PR was built. Merged now, they would still be pending,
+* and the release workflow would open the next release PR instead of releasing
+* this one. The release workflow rebuilds the PR on every push that has pending
+* intents, so this passes again once it caught up. The intents are the Markdown
+* files directly in `.changeset/`, as `pnpm change` writes them
+*/
+async function requireNoPendingIntents() {
+	const { stdout } = await getExecOutput("git", [
+		"ls-tree",
+		"--name-only",
+		"-z",
+		HEAD,
+		".changeset/"
+	], { silent: true });
+	const pending = stdout.split("\0").filter((file) => file.endsWith(".md"));
+	if (pending.length > 0) throw new Error(`The base branch has change intents this release PR doesn't apply yet:\n${pending.join("\n")}\nWait for the release workflow to update the PR, or run it by hand if it failed, then merge the updated PR`);
+}
 async function run() {
 	const eventName = process$1.env["GITHUB_EVENT_NAME"];
 	if (eventName !== "pull_request") throw new Error(`Runs on \`pull_request\` events only, got \`${eventName ?? "none"}\``);
@@ -17106,6 +17125,7 @@ async function run() {
 		".changeset/ledger.yaml"
 	], { ignoreReturnCode: true });
 	if (ledgerExitCode === 1) {
+		await requireNoPendingIntents();
 		info("Release PR, no change intent needed");
 		return;
 	}

@@ -31,7 +31,7 @@ try {
   };
 
   const appAuth = createAppAuth({
-    // Accepts the client ID as well, which GitHub recommends over the app ID
+    /** Accepts the client ID as well, which GitHub recommends over the app ID */
     appId: clientId,
     privateKey,
   });
@@ -45,7 +45,7 @@ try {
 
   const { data } = await octokit.rest.apps.createInstallationAccessToken({
     installation_id: installation.id,
-    // Without it the token can access every repository of the installation
+    /** Without it the token can access every repository of the installation. */
     repositories: [context.repo.repo],
     permissions,
   });

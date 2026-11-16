@@ -1,20 +1,15 @@
 name: CI
 
-# Reusable CI for pnpm workspaces that record their changes as change intents
-# (`pnpm change`). A project calls it from its own CI workflow, on pull
-# requests and on pushes to main, and the release workflow of this repository
-# calls it before publishing to npm. See the README for how to call it
+# Reusable CI workflow for pnpm workspaces tracking version changes via change
+# intents (`pnpm change`). Called by downstream consumer repositories on pull
+# requests and pushes to `main`, and invoked by this repository's release
+# workflow before publishing to npm. See the README for usage instructions.
 #
-# Runs the root scripts of the workspace, so each project decides what they do:
-# `pnpm build`, `pnpm lint`, `pnpm format --check` and `pnpm test`, if there is
-# one
+# Executes standard root-level workspace scripts: `pnpm build`, `pnpm lint`,
+# `pnpm format --check`, and `pnpm test` (if defined).
 on:
   workflow_call:
     inputs:
-      cache:
-        description: Cache the pnpm store and the Playwright browsers between runs
-        type: boolean
-        default: false
       playwright-browsers:
         description: Playwright browsers to install before the tests, separated by spaces, e.g. `chromium webkit firefox`. Nothing is installed when it's empty
         type: string
@@ -22,30 +17,30 @@ on:
 
 permissions: {}
 
-# Every job has a timeout, here and in the release workflow: the default is six
-# hours, which is how long a hung browser test would keep a runner busy
+# Explicit timeouts are set for all jobs to avoid holding GitHub Actions runners
+# for the default 6-hour limit if a process (such as a browser test) hangs.
 
-# Pull requests: one run per branch, a new push cancels the old run. Everything
-# else gets a group of its own (the run id), so runs never wait for each other:
-# GitHub cancels a waiting run when a newer one arrives, and a cancelled check
-# would silently skip a release. `github.workflow` is the name of the calling
-# workflow, so CI and Release never share a group. The calling workflows must
-# not set a group of their own, or they would cancel themselves
+# Concurrency configuration:
+# - Pull requests: grouped by branch ref; pushing new commits cancels in-flight runs.
+# - Other events (e.g. push to main): assigned a unique group via `github.run_id` so
+#   runs execute concurrently without queueing or auto-cancelling (which would bypass
+#   automated release steps).
+# - Prefixed with `github.workflow` so caller workflows (e.g. CI vs. Release) do not
+#   conflict. Calling workflows should not define top-level concurrency groups.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Every pull request has to add a change intent: `pnpm change`, or
-  # `pnpm change --bump none` when the change needs no release. Meant to be a
-  # required status check of the main branch ruleset, like `check`. Skipped on
-  # pushes and in the release workflow, and a skipped job counts as a passed
-  # check
+  # Enforces that every pull request includes a change intent (`pnpm change` or
+  # `pnpm change --bump none` for changes that require no release). Intended as a
+  # required status check on `main`. Skipped on direct pushes and during release
+  # workflow runs (skipped jobs satisfy required status checks).
   #
-  # Also skipped for Dependabot's pull requests: they update the actions the
-  # workflows use, which never needs a release, and Dependabot can't add an
-  # intent. The author of a pull request can't be faked, unlike `github.actor`,
-  # which is whoever pushed last
+  # Skipped for Dependabot PRs because automated dependency bumps do not warrant
+  # package releases and Dependabot cannot generate intents. The PR author is
+  # verified via `github.event.pull_request.user.login` to prevent spoofing via
+  # `github.actor`.
   changeset:
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
@@ -53,15 +48,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      # The merge commit of the pull request and its parents: HEAD^1 is the tip
-      # of the base branch, so HEAD^1..HEAD is what the pull request changes
+      # Fetches the PR merge commit and its parents (`fetch-depth: 2`). `HEAD^1`
+      # points to the target base branch tip, allowing `HEAD^1..HEAD` to isolate
+      # the changes introduced by the pull request.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 2
 
-      # `$/` is this repository at the commit of this workflow, the one the
-      # caller pinned, not the repository of the caller
       - name: Require a change intent
         uses: $/require-change-intent
 
@@ -75,26 +69,22 @@ jobs:
         with:
           persist-credentials: false
 
-      # Installs pnpm from "packageManager" and Node from "devEngines.runtime"
-      # in package.json, then runs `pnpm install --frozen-lockfile`
       - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
-          cache: ${{ inputs.cache }}
           require-lockfile: true
 
-      # Fails on a change intent pnpm can't read, e.g. an unknown package or
-      # bump type, which would otherwise only fail the release workflow on main
+      # Validates change intents against package names and valid bump types,
+      # catching syntax or schema errors in PRs before they reach the release workflow.
       - name: Validate change intents
         run: pnpm change status
 
-      # Before linting: packages of a workspace may get the types of other
-      # packages from their build output
+      # Runs build prior to linting so workspace packages that rely on emitted types
+      # or build artifacts from sibling packages can resolve them.
       - name: Build
         run: pnpm build
 
-      # Fails when the build changes or adds files that aren't ignored, e.g.
-      # committed build output that wasn't rebuilt after a change to the
-      # sources or the dependencies, or was edited by hand
+      # Verifies that `pnpm build` leaves the working tree clean, detecting
+      # stale, uncommitted build artifacts or unignored generated files.
       - name: Check that the build leaves no changes
         run: |
           changed=$(git status --porcelain)
@@ -112,60 +102,26 @@ jobs:
       - name: Check formatting
         run: pnpm format --check
 
-      # The browsers are installed with the Playwright version of the first
-      # workspace package that depends on it. With `cache`, they're cached per
-      # version and list of browsers, so they're only downloaded after an
-      # update. Their system packages aren't part of the cache and are
-      # installed on every run
-      - id: playwright
-        name: Find Playwright
+      # `pnpm install` doesn't download the browsers or their system packages.
+      # Installs both with the Playwright of the first workspace package that
+      # depends on it, so the browsers match the version the tests run.
+      - name: Install Playwright browsers
         if: inputs.playwright-browsers != ''
         env:
           BROWSERS: ${{ inputs.playwright-browsers }}
         run: |
-          found=$(pnpm ls -r --depth 0 --json playwright | jq -r '
-            map({ path, version: (.dependencies.playwright // .devDependencies.playwright).version } | select(.version))
-            | first // empty
-            | "\(.path)\t\(.version)"
+          dir=$(pnpm ls -r --depth 0 --json playwright | jq -r '
+            map(select((.dependencies.playwright // .devDependencies.playwright).version))
+            | first.path // empty
           ')
 
-          if [ -z "$found" ]; then
+          if [ -z "$dir" ]; then
             echo "::error::\`playwright-browsers\` is set, but no workspace package depends on Playwright"
             exit 1
           fi
 
-          version=${found#*$'\t'}
           read -ra browsers <<< "$BROWSERS"
-
-          {
-            echo "dir=${found%%$'\t'*}"
-            echo "cache-key=playwright-$RUNNER_OS-$version-$(IFS=-; echo "${browsers[*]}")"
-          } >> "$GITHUB_OUTPUT"
-
-      - id: browsers-cache
-        if: inputs.playwright-browsers != '' && inputs.cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ steps.playwright.outputs.cache-key }}
-
-      - name: Install browsers
-        if: inputs.playwright-browsers != '' && steps.browsers-cache.outputs.cache-hit != 'true'
-        env:
-          DIR: ${{ steps.playwright.outputs.dir }}
-          BROWSERS: ${{ inputs.playwright-browsers }}
-        run: |
-          read -ra browsers <<< "$BROWSERS"
-          pnpm --dir "$DIR" exec playwright install --with-deps "${browsers[@]}"
-
-      - name: Install the system packages of the browsers
-        if: inputs.playwright-browsers != '' && steps.browsers-cache.outputs.cache-hit == 'true'
-        env:
-          DIR: ${{ steps.playwright.outputs.dir }}
-          BROWSERS: ${{ inputs.playwright-browsers }}
-        run: |
-          read -ra browsers <<< "$BROWSERS"
-          pnpm --dir "$DIR" exec playwright install-deps "${browsers[@]}"
+          pnpm --dir "$dir" exec playwright install --with-deps "${browsers[@]}"
 
       - name: Test
         run: pnpm run --if-present test

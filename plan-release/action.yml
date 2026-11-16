@@ -1,0 +1,13 @@
+name: Plan Release
+description:
+  GitHub Action for deciding what the release workflow does on a push to main.
+  Opens the release PR when change intents are pending, and releases when the push changed `.changeset/ledger.yaml` (or on `workflow_dispatch`).
+  Needs the full history checked out, with a fetch depth of 0. Internal to `release.yml`.
+
+outputs:
+  action:
+    description: What to do, `pr`, `release` or `none`
+
+runs:
+  using: node24
+  main: dist/index.js
