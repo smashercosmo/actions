@@ -8,12 +8,15 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   findLastCommitChanging,
   getEmptyTreeId,
+  getObjectId,
   hasFileChanged,
   hasTag,
   isCommit,
   listAddedFiles,
   listFiles,
+  listStagedChanges,
   listStagedFiles,
+  readBlob,
 } from "./git.ts";
 
 function git(args: readonly string[]) {
@@ -286,6 +289,89 @@ describe("listStagedFiles()", () => {
     git(["add", "modified.md", "deleted.md", "added.md"]);
 
     expect(listStagedFiles()).toStrictEqual(["added.md", "modified.md"]);
+  });
+});
+
+describe("getObjectId()", () => {
+  it("should return the full ID of a commit and of its tree", () => {
+    expect.hasAssertions();
+
+    createRepository();
+    const id = commit("first");
+
+    expect({
+      commit: getObjectId("HEAD"),
+      tree: getObjectId("HEAD^{tree}"),
+    }).toStrictEqual({
+      commit: id,
+      tree: git(["show", "--no-patch", "--format=%T", id]),
+    });
+  });
+
+  it("should throw for a revision that doesn't exist", () => {
+    expect.hasAssertions();
+
+    createRepository();
+    commit("first");
+
+    expect(() => getObjectId("missing")).toThrow(
+      "The process 'git' failed with exit code 128",
+    );
+  });
+});
+
+describe("listStagedChanges()", () => {
+  it("should list each staged change with its mode and content", () => {
+    expect.hasAssertions();
+
+    createRepository();
+    writeFile("modified.md", "first");
+    writeFile("deleted.sh", "");
+    fs.chmodSync("deleted.sh", 0o755);
+    writeFile("renamed.md", "renamed");
+    commit("first");
+    writeFile("modified.md", "second");
+    fs.rmSync("deleted.sh");
+    fs.renameSync("renamed.md", "moved.md");
+    writeFile("added file.md", "added");
+    writeFile("unstaged.md", "");
+    git(["add", "modified.md", "deleted.sh", "renamed.md", "moved.md"]);
+    git(["add", "added file.md"]);
+
+    function blob(file: string) {
+      return git(["rev-parse", `:${file}`]);
+    }
+
+    expect(listStagedChanges()).toStrictEqual([
+      { path: "added file.md", mode: "100644", blob: blob("added file.md") },
+      { path: "deleted.sh", mode: "100755", blob: undefined },
+      { path: "modified.md", mode: "100644", blob: blob("modified.md") },
+      { path: "moved.md", mode: "100644", blob: blob("moved.md") },
+      { path: "renamed.md", mode: "100644", blob: undefined },
+    ]);
+  });
+
+  it("should list nothing when nothing is staged", () => {
+    expect.hasAssertions();
+
+    createRepository();
+    writeFile("file.md", "first");
+    commit("first");
+    writeFile("file.md", "second");
+
+    expect(listStagedChanges()).toStrictEqual([]);
+  });
+});
+
+describe("readBlob()", () => {
+  it("should return the content of a blob as it is", () => {
+    expect.hasAssertions();
+
+    createRepository();
+    writeFile("file.md", "line\n\n");
+    git(["add", "file.md"]);
+
+    expect(readBlob(git(["rev-parse", ":file.md"]))).toBe("line\n\n");
   });
 });
 

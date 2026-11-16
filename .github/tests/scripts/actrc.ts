@@ -137,10 +137,6 @@ function getEnv({
    */
   const gitConfig = [
     [`url.${remoteDir}/${CONSUMER_REPO}.insteadOf`, CONSUMER_URL],
-    [
-      `url.${remoteDir}/${CONSUMER_REPO}.insteadOf`,
-      `https://x-access-token:${INSTALLATION_TOKEN}@github.com/${CONSUMER_REPOSITORY}`,
-    ],
     /**
      * Prevents git from throwing "fatal: detected dubious ownership in
      * repository" errors when root inside Docker accesses files created by your

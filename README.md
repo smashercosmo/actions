@@ -68,11 +68,11 @@ Applies all pending change intents by running `pnpm version -r`.
 
 This updates package versions, generates or updates their changelogs, and removes the processed change intents.
 
-The resulting changes are committed using the GitHub App's bot identity and pushed to the release branch. The action then opens a release PR or updates the existing one.
+The resulting changes are committed to the release branch through the GitHub API, so GitHub signs the commit as the GitHub App's bot and it shows as verified, e.g. for a ruleset that requires signed commits. The action then opens a release PR or updates the existing one.
 
 If all pending change intents explicitly decline a release (`pnpm change --bump none`), no release PR is created.
 
-**Important:** The action refuses to push anything if a public package's current version has not yet been published to npm. A staged version does not count as published.
+**Important:** The action refuses to commit anything if a public package's current version has not yet been published to npm. A staged version does not count as published.
 
 This check prevents `pnpm version` from keeping the existing version and accidentally releasing it a second time.
 
@@ -99,7 +99,6 @@ Example:
 - uses: smashercosmo/actions/create-release-pr@<commit hash>
   with:
     token: ${{ steps.app-token.outputs.token }}
-    app-slug: ${{ steps.app-token.outputs.app-slug }}
     format-command: pnpm exec oxfmt
 ```
 
@@ -108,9 +107,8 @@ Example:
 | Input            | Required | Description                                                                                                                                                        |
 | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `token`          | yes      | GitHub App installation token with `contents` and `pull-requests` write permissions.                                                                               |
-| `app-slug`       | yes      | Slug of the GitHub App. Used as the author of the generated commit.                                                                                                |
 | `base`           | no       | Branch the release PR targets. Defaults to `main`.                                                                                                                 |
-| `branch`         | no       | Branch used for the release PR. Defaults to `release`. This branch is force-pushed on every run, so do not use it for anything else.                               |
+| `branch`         | no       | Branch used for the release PR. Defaults to `release`. This branch is overwritten on every run, so do not use it for anything else.                                |
 | `format-command` | no       | Command used to format the files changed by `pnpm version`. The changed file paths are appended to the command as arguments. If empty, no formatting is performed. |
 
 **Outputs**

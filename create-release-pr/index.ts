@@ -1,10 +1,22 @@
 import { getInput, info, setFailed, setOutput } from "#shared/core.ts";
 import { exec, getExecOutput } from "#shared/exec.ts";
-import { listStagedFiles } from "#shared/git.ts";
+import {
+  getObjectId,
+  listStagedChanges,
+  listStagedFiles,
+  readBlob,
+} from "#shared/git.ts";
 import { createGitHubClient, getRepository } from "#shared/github.ts";
 import { array, parse } from "#shared/schema.ts";
 
-import { PullRequestSchema, ReleasePlanSchema, UserSchema } from "./schemas.ts";
+import {
+  GitObjectSchema,
+  PullRequestSchema,
+  RefSchema,
+  ReleasePlanSchema,
+} from "./schemas.ts";
+
+type GitHubClient = ReturnType<typeof createGitHubClient>;
 
 /**
  * Applies pending change intents with `pnpm version -r` and returns the
@@ -19,29 +31,86 @@ function applyChangeIntents() {
   );
 }
 
+/**
+ * Commits the staged changes on top of `HEAD` through the GitHub API and points
+ * `branch` at the commit, creating the branch if needed.
+ *
+ * GitHub signs a commit created this way with an app installation token, as
+ * long as the request sets no author or committer, so the commit shows as
+ * verified. The branch moves straight from its previous commit to the new one,
+ * so an open release PR never points at a commit of the base branch, which
+ * GitHub can take for a merge of the PR.
+ */
+async function commitStagedChanges({
+  github,
+  repoPath,
+  branch,
+  message,
+}: {
+  github: GitHubClient;
+  repoPath: `/repos/${string}/${string}`;
+  branch: string;
+  message: string;
+}) {
+  const tree = await github.request(
+    {
+      method: "POST",
+      path: `${repoPath}/git/trees`,
+      body: {
+        base_tree: getObjectId("HEAD^{tree}"),
+        /** `pnpm version` and formatters write text files only. */
+        tree: listStagedChanges().map(({ path, mode, blob }) =>
+          blob === undefined
+            ? // oxlint-disable-next-line unicorn/no-null -- The API deletes a path whose `sha` is null.
+              { path, mode, type: "blob", sha: null }
+            : { path, mode, type: "blob", content: readBlob(blob) },
+        ),
+      },
+    },
+    GitObjectSchema,
+  );
+
+  const commit = await github.request(
+    {
+      method: "POST",
+      path: `${repoPath}/git/commits`,
+      body: { message, tree: tree.sha, parents: [getObjectId("HEAD")] },
+    },
+    GitObjectSchema,
+  );
+
+  /** Matching refs are listed by prefix, e.g. `release` also lists `release-x`. */
+  const ref = `heads/${branch}`;
+  const matchingRefs = await github.request(
+    { method: "GET", path: `${repoPath}/git/matching-refs/${ref}` },
+    array(RefSchema),
+  );
+
+  const exists = matchingRefs.some(({ ref: name }) => name === `refs/${ref}`);
+
+  await github.request(
+    exists
+      ? {
+          method: "PATCH",
+          path: `${repoPath}/git/refs/${ref}`,
+          body: { sha: commit.sha, force: true },
+        }
+      : {
+          method: "POST",
+          path: `${repoPath}/git/refs`,
+          body: { ref: `refs/${ref}`, sha: commit.sha },
+        },
+  );
+}
+
 async function run() {
   const token = getInput("token", { required: true });
-  const appSlug = getInput("app-slug", { required: true });
   const base = getInput("base", { required: true });
   const branch = getInput("branch", { required: true });
   const formatCommand = getInput("format-command");
 
   const github = createGitHubClient({ token, userAgent: "create-release-pr" });
   const { owner, repo } = getRepository();
-
-  const bot = `${appSlug}[bot]`;
-  const botUser = await github.request(
-    { method: "GET", path: `/users/${encodeURIComponent(bot)}` },
-    UserSchema,
-  );
-  exec("git", ["config", "user.name", bot]);
-  exec("git", [
-    "config",
-    "user.email",
-    `${botUser.id}+${bot}@users.noreply.github.com`,
-  ]);
-
-  exec("git", ["switch", "-C", branch]);
 
   const releasePlan = applyChangeIntents();
 
@@ -110,20 +179,11 @@ async function run() {
   ].join("\n");
 
   exec("git", ["add", "-A"]);
-  exec("git", ["commit", "-m", title]);
-  exec(
-    "git",
-    [
-      "remote",
-      "set-url",
-      "origin",
-      `https://x-access-token:${token}@github.com/${owner}/${repo}.git`,
-    ],
-    { silent: true },
-  );
-  exec("git", ["push", "--force", "origin", branch]);
 
-  const pullsPath = `/repos/${owner}/${repo}/pulls` as const;
+  const repoPath = `/repos/${owner}/${repo}` as const;
+  await commitStagedChanges({ github, repoPath, branch, message: title });
+
+  const pullsPath = `${repoPath}/pulls` as const;
   const [existing] = await github.request(
     {
       method: "GET",
