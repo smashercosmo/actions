@@ -10,3 +10,8 @@ actions@0.3.0:
   dir: ""
   intents:
     - lucky-trees-exist
+actions@0.4.0:
+  dir: ""
+  intents:
+    - eager-mails-fly
+    - thin-eels-taste
