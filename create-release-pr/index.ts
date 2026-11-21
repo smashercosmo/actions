@@ -1,10 +1,10 @@
 import { getInput, info, setFailed, setOutput } from "#shared/core.ts";
 import { exec, getExecOutput } from "#shared/exec.ts";
 import {
-  getObjectId,
+  listChangedFiles,
   listStagedChanges,
-  listStagedFiles,
   readBlob,
+  resolveId,
 } from "#shared/git.ts";
 import { createGitHubClient, getRepository } from "#shared/github.ts";
 import { array, parse } from "#shared/schema.ts";
@@ -17,12 +17,15 @@ import {
 } from "./schemas.ts";
 
 type GitHubClient = ReturnType<typeof createGitHubClient>;
+type RepoPath = `/repos/${string}/${string}`;
 
 /**
  * Applies pending change intents with `pnpm version -r` and returns the
  * packages pnpm plans to publish.
+ *
+ * @returns The packages with their new versions.
  */
-function applyChangeIntents() {
+function getReleasePlan() {
   const { stdout } = getExecOutput("pnpm", ["version", "-r", "--json"]);
   return parse(
     ReleasePlanSchema,
@@ -32,24 +35,25 @@ function applyChangeIntents() {
 }
 
 /**
- * Commits the staged changes on top of `HEAD` through the GitHub API and points
- * `branch` at the commit, creating the branch if needed.
+ * Commits staged changes on top of `HEAD` through the GitHub API and returns
+ * the commit ID. No branch points at the commit yet.
  *
- * GitHub signs a commit created this way with an app installation token, as
- * long as the request sets no author or committer, so the commit shows as
- * verified. The branch moves straight from its previous commit to the new one,
- * so an open release PR never points at a commit of the base branch, which
- * GitHub can take for a merge of the PR.
+ * GitHub signs the commit when an app installation token is used and the
+ * request sets no author or committer, so the commit shows as verified.
+ *
+ * @param options The options.
+ * @param options.github Client authenticated with the app installation token.
+ * @param options.repoPath API path of the repository.
+ * @param options.message Message of the commit.
+ * @returns The ID of the new commit.
  */
-async function commitStagedChanges({
+async function createSignedCommit({
   github,
   repoPath,
-  branch,
   message,
 }: {
   github: GitHubClient;
-  repoPath: `/repos/${string}/${string}`;
-  branch: string;
+  repoPath: RepoPath;
   message: string;
 }) {
   const tree = await github.request(
@@ -57,8 +61,7 @@ async function commitStagedChanges({
       method: "POST",
       path: `${repoPath}/git/trees`,
       body: {
-        base_tree: getObjectId("HEAD^{tree}"),
-        /** `pnpm version` and formatters write text files only. */
+        base_tree: resolveId("HEAD^{tree}"),
         tree: listStagedChanges().map(({ path, mode, blob }) =>
           blob === undefined
             ? // oxlint-disable-next-line unicorn/no-null -- The API deletes a path whose `sha` is null.
@@ -74,11 +77,40 @@ async function commitStagedChanges({
     {
       method: "POST",
       path: `${repoPath}/git/commits`,
-      body: { message, tree: tree.sha, parents: [getObjectId("HEAD")] },
+      body: { message, tree: tree.sha, parents: [resolveId("HEAD")] },
     },
     GitObjectSchema,
   );
 
+  return commit.sha;
+}
+
+/**
+ * Points `branch` at `sha`, creating the branch if needed and discarding its
+ * previous history otherwise.
+ *
+ * The branch moves straight from its previous commit to the new one. Resetting
+ * it to the base branch first would briefly make the release PR's head point at
+ * commit the base branch already contains, and GitHub might mark the PR as
+ * merged.
+ *
+ * @param options The options.
+ * @param options.github Client authenticated with the app installation token.
+ * @param options.repoPath API path of the repository.
+ * @param options.branch Name of the branch, without `refs/heads/`.
+ * @param options.sha ID of the commit to point the branch at.
+ */
+async function forceUpdateBranch({
+  github,
+  repoPath,
+  branch,
+  sha,
+}: {
+  github: GitHubClient;
+  repoPath: RepoPath;
+  branch: string;
+  sha: string;
+}) {
   /** Matching refs are listed by prefix, e.g. `release` also lists `release-x`. */
   const ref = `heads/${branch}`;
   const matchingRefs = await github.request(
@@ -93,12 +125,12 @@ async function commitStagedChanges({
       ? {
           method: "PATCH",
           path: `${repoPath}/git/refs/${ref}`,
-          body: { sha: commit.sha, force: true },
+          body: { sha, force: true },
         }
       : {
           method: "POST",
           path: `${repoPath}/git/refs`,
-          body: { ref: `refs/${ref}`, sha: commit.sha },
+          body: { ref: `refs/${ref}`, sha },
         },
   );
 }
@@ -112,7 +144,7 @@ async function run() {
   const github = createGitHubClient({ token, userAgent: "create-release-pr" });
   const { owner, repo } = getRepository();
 
-  const releasePlan = applyChangeIntents();
+  const releasePlan = getReleasePlan();
 
   /**
    * An empty plan means every pending change explicitly opted out of a release.
@@ -142,25 +174,26 @@ async function run() {
         `${versions} isn't on npm yet, so this release PR would release it again.`,
         `If it's staged, approve it with \`pnpm stage approve\`.`,
         `If its release failed or never ran, re-run the release PR merge workflow.`,
-        `If the release PR was merged while change intents were pending,`,
-        `revert that merge instead. Then re-run this job.`,
       ].join(" "),
     );
   }
 
-  exec("git", ["add", "-A"]);
-
   /**
-   * Format exactly the files `pnpm version` staged, then stage formatter
-   * output.
+   * Format the files `pnpm version` changed or created (the checkout is clean
+   * before it runs, so every change is pnpm's). New files, like a package's
+   * first CHANGELOG.md, are untracked hence "changed" files and not "staged"
+   * ones.
    */
   if (formatCommand !== "") {
-    const changedFiles = listStagedFiles();
+    const changedFiles = listChangedFiles();
 
     if (changedFiles.length > 0) {
       exec(formatCommand, changedFiles);
     }
   }
+
+  /** Stage everything for the release commit. */
+  exec("git", ["add", "-A"]);
 
   const title = `chore: release ${releasePlan
     .map(({ name, newVersion }) => `${name}@${newVersion}`)
@@ -178,10 +211,9 @@ async function run() {
     `It is updated automatically when new change intents land on \`${base}\`.`,
   ].join("\n");
 
-  exec("git", ["add", "-A"]);
-
   const repoPath = `/repos/${owner}/${repo}` as const;
-  await commitStagedChanges({ github, repoPath, branch, message: title });
+  const sha = await createSignedCommit({ github, repoPath, message: title });
+  await forceUpdateBranch({ github, repoPath, branch, sha });
 
   const pullsPath = `${repoPath}/pulls` as const;
   const [existing] = await github.request(

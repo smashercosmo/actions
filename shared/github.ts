@@ -24,6 +24,8 @@ type RequestOptions = Readonly<{
 /**
  * Reads the current workflow repository from `GITHUB_REPOSITORY`
  * (`owner/repo`).
+ *
+ * @returns The owner and the name of the repository.
  */
 function getRepository() {
   const repository = process.env["GITHUB_REPOSITORY"];
@@ -54,6 +56,11 @@ function getRepository() {
  *
  * Responses are validated before use, and `GITHUB_API_URL` lets tests point the
  * client at a mock GitHub server.
+ *
+ * @param options The options.
+ * @param options.token Token used for authenticated requests.
+ * @param options.userAgent User agent sent to GitHub, usually the action name.
+ * @returns The client, with a `request` function.
  */
 function createGitHubClient({ token, userAgent }: ClientOptions) {
   const apiUrl = process.env["GITHUB_API_URL"] ?? "https://api.github.com";

@@ -24,6 +24,9 @@ type ExecOutput = Readonly<{
  * Arguments are separated by spaces. Double quotes keep the spaces inside them
  * and are not part of the argument; inside quotes, `\"` means a literal quote.
  * This is intentionally much smaller than a shell parser.
+ *
+ * @param commandLine Command line to split.
+ * @returns The command, then its arguments.
  */
 function splitCommandLine(commandLine: string) {
   const parts: string[] = [];
@@ -70,6 +73,8 @@ function splitCommandLine(commandLine: string) {
  * @param commandLine The command to run. Can include arguments (see
  *   `splitCommandLine`), which come before `args`.
  * @param args The arguments, passed to the command as they are.
+ * @param options How to run the command, see `ExecOptions`.
+ * @returns The exit code and the output of the command.
  */
 function getExecOutput(
   commandLine: string,
@@ -124,7 +129,14 @@ function getExecOutput(
   return { exitCode: status, stdout, stderr };
 }
 
-/** Runs a command when the caller only needs the exit code. */
+/**
+ * Runs a command when the caller only needs the exit code.
+ *
+ * @param commandLine The command to run, as for `getExecOutput`.
+ * @param args The arguments, passed to the command as they are.
+ * @param options How to run the command, see `ExecOptions`.
+ * @returns The exit code of the command.
+ */
 function exec(
   commandLine: string,
   args: readonly string[] = [],

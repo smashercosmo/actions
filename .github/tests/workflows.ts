@@ -1,6 +1,5 @@
 import { ACTIONS_REF, ACTIONS_REPOSITORY } from "./scripts/actrc.ts";
 
-/** Reusable workflow path as an external consumer repository would write it. */
 const WORKFLOWS = `${ACTIONS_REPOSITORY}/.github/workflows`;
 
 const CI_WORKFLOW = String.raw`

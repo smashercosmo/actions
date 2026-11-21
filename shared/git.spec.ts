@@ -8,15 +8,15 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   findLastCommitChanging,
   getEmptyTreeId,
-  getObjectId,
   hasFileChanged,
   hasTag,
   isCommit,
   listAddedFiles,
+  listChangedFiles,
   listFiles,
   listStagedChanges,
-  listStagedFiles,
   readBlob,
+  resolveId,
 } from "./git.ts";
 
 function git(args: readonly string[]) {
@@ -28,7 +28,12 @@ function writeFile(file: string, content: string) {
   fs.writeFileSync(file, content);
 }
 
-/** Commits the current tree and returns the new commit ID. */
+/**
+ * Commits the current tree.
+ *
+ * @param message Message of the commit.
+ * @returns The ID of the new commit.
+ */
 function commit(message: string) {
   git(["add", "-A"]);
   git(["commit", "--allow-empty", "--quiet", "-m", message]);
@@ -274,25 +279,37 @@ describe("listAddedFiles()", () => {
   });
 });
 
-describe("listStagedFiles()", () => {
-  it("should list the staged files except the deleted ones", () => {
+describe("listChangedFiles()", () => {
+  it("should list the changed and untracked files except the deleted and ignored ones", () => {
     expect.hasAssertions();
 
     createRepository();
+    writeFile(".gitignore", "ignored.md\n");
     writeFile("modified.md", "first");
+    writeFile("staged.md", "first");
     writeFile("deleted.md", "");
+    writeFile("removed.md", "");
+    writeFile("unchanged.md", "");
     commit("first");
     writeFile("modified.md", "second");
-    fs.rmSync("deleted.md");
+    writeFile("staged.md", "second");
     writeFile("added.md", "");
-    writeFile("unstaged.md", "");
-    git(["add", "modified.md", "deleted.md", "added.md"]);
+    writeFile("untracked.md", "");
+    writeFile("ignored.md", "");
+    fs.rmSync("deleted.md");
+    git(["add", "staged.md", "added.md"]);
+    git(["rm", "--quiet", "removed.md"]);
 
-    expect(listStagedFiles()).toStrictEqual(["added.md", "modified.md"]);
+    expect(listChangedFiles()).toStrictEqual([
+      "added.md",
+      "modified.md",
+      "staged.md",
+      "untracked.md",
+    ]);
   });
 });
 
-describe("getObjectId()", () => {
+describe("resolveId()", () => {
   it("should return the full ID of a commit and of its tree", () => {
     expect.hasAssertions();
 
@@ -300,8 +317,8 @@ describe("getObjectId()", () => {
     const id = commit("first");
 
     expect({
-      commit: getObjectId("HEAD"),
-      tree: getObjectId("HEAD^{tree}"),
+      commit: resolveId("HEAD"),
+      tree: resolveId("HEAD^{tree}"),
     }).toStrictEqual({
       commit: id,
       tree: git(["show", "--no-patch", "--format=%T", id]),
@@ -314,7 +331,7 @@ describe("getObjectId()", () => {
     createRepository();
     commit("first");
 
-    expect(() => getObjectId("missing")).toThrow(
+    expect(() => resolveId("missing")).toThrow(
       "The process 'git' failed with exit code 128",
     );
   });

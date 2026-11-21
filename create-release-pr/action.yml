@@ -12,8 +12,8 @@ inputs:
     description: Branch targeted by the release pull request.
     default: main
   branch:
-    description: Branch used for the release pull request. It is overwritten
-      on every run, so reserve it for this action.
+    description: Branch used for the release pull request.
+      It is overwritten on every run, so reserve it for this action only.
     default: release
   format-command:
     description: Optional formatter command for files changed by `pnpm version`,

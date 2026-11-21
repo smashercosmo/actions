@@ -31,6 +31,10 @@ function getEnv(name: string) {
  *
  * Accepts headings like `## 1.2.0` and `## [1.2.0] - 2026-01-15`, then reads
  * until the next version heading.
+ *
+ * @param changelog Content of CHANGELOG.md.
+ * @param version Version to read the notes of.
+ * @returns The notes, or an empty string when the version has no section.
  */
 function getReleaseNotes(changelog: string, version: string) {
   const notes: string[] = [];
@@ -53,9 +57,16 @@ function getReleaseNotes(changelog: string, version: string) {
 }
 
 /**
- * Finds the commit that introduced the current package version. Because that
- * version line still exists, the latest `git log -S` match is the addition we
- * want to tag.
+ * Finds the commit that introduced the package's current version by looking for
+ * the last commit that changed the `"version": "<version>"` line in
+ * package.json. Git's `-S` option matches both additions and removals. However,
+ * since the version line is present in the current version of package.json, the
+ * most recent matching commit must be the one that introduced it.
+ *
+ * @param packagePath Directory of the package.
+ * @param version Current version of the package.
+ * @param fallback Commit to return when the history search fails.
+ * @returns The ID of the commit, or `fallback`.
  */
 function getVersionCommit(
   packagePath: string,
@@ -82,7 +93,6 @@ function getVersionCommit(
   return fallback;
 }
 
-/** Reads how long to wait for a version to appear on npm. */
 function getWaitMinutes() {
   const input = getInput("npm-wait-minutes");
   const minutes = Number(input);

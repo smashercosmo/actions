@@ -14,12 +14,22 @@ const { publicKey, privateKey } = generateKeyPairSync("rsa", {
 const PKCS1_KEY = privateKey.export({ type: "pkcs1", format: "pem" });
 const PKCS8_KEY = privateKey.export({ type: "pkcs8", format: "pem" });
 
-/** Decodes a JWT header or payload segment. */
+/**
+ * Decodes a JWT header or payload segment.
+ *
+ * @param part Base64url-encoded segment.
+ * @returns The parsed JSON.
+ */
 function decodePart(part: string): unknown {
   return JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
 }
 
-/** Splits a JWT into the pieces assertions need. */
+/**
+ * Splits a JWT into the pieces assertions need.
+ *
+ * @param jwt The JWT.
+ * @returns The decoded header and payload, the signed part, and the signature.
+ */
 function decode(jwt: string) {
   const [header = "", payload = "", signature = ""] = jwt.split(".");
 

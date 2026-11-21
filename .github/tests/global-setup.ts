@@ -12,6 +12,8 @@ const stagedDirs: string[] = [];
  *
  * Vitest global setup runs outside test workers, so values must go through
  * `project.provide()` and `inject()`.
+ *
+ * @param project The Vitest project to provide the values to.
  */
 function setup(project: TestProject) {
   const { dir, localRepositories } = stageActionsRepo();

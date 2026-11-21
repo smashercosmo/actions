@@ -34,6 +34,9 @@ const StagedSchema = z.object({ items: z.array(StagedItemSchema) });
  * There are no upstream fallbacks, so every installed package must have been
  * published by the test. Staged versions stay separate until `approve` is
  * called, matching the release workflow.
+ *
+ * @returns The port and the `.npmrc` of the registry, with helpers to inspect
+ *   and approve versions.
  */
 async function createMockRegistry() {
   /** Resolve macOS tmpdir symlinks so Docker sees the same paths. */
@@ -97,6 +100,9 @@ async function createMockRegistry() {
     /**
      * Public versions only; staged versions are visible through
      * `getStagedVersions`.
+     *
+     * @param name Name of the package.
+     * @returns The public versions, or none when the package doesn't exist.
      */
     async getVersions(name: string) {
       const response = await fetch(`${url}/${name}`);
@@ -110,7 +116,11 @@ async function createMockRegistry() {
       return Object.keys(PackumentSchema.parse(packument).versions);
     },
 
-    /** Versions waiting for staging approval, formatted as `<name>@<version>`. */
+    /**
+     * Versions waiting for staging approval.
+     *
+     * @returns The versions, formatted as `<name>@<version>`.
+     */
     async getStagedVersions() {
       const response = await fetch(`${url}/-/stage`, {
         headers: { authorization: `Bearer ${token}` },
@@ -125,6 +135,8 @@ async function createMockRegistry() {
     /**
      * Approves a staged version. Verdaccio's test registry does not ask for a
      * one-time password.
+     *
+     * @param spec Version to approve, formatted as `<name>@<version>`.
      */
     async approve(spec: string) {
       const response = await fetch(`${url}/-/stage`, {
@@ -154,6 +166,8 @@ async function createMockRegistry() {
     /**
      * Waits until `create-github-release` checks whether a package version has
      * reached the public registry.
+     *
+     * @param name Name of the package.
      */
     async waitForPackumentRequest(name: string) {
       const { promise, resolve } = Promise.withResolvers<ServerResponse>();

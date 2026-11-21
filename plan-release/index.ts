@@ -15,6 +15,8 @@ const LEDGER = ".changeset/ledger.yaml";
 /**
  * Reads the pre-push commit from GitHub's event payload without pulling in a
  * GitHub API client just for one field.
+ *
+ * @returns The `before` commit, or an empty string when the event has none.
  */
 function readBefore() {
   const eventPath = process.env["GITHUB_EVENT_PATH"];
@@ -37,6 +39,8 @@ function readBefore() {
  * The event's `before` commit covers every commit in a push. Force-pushes, new
  * branches, and manual runs may not have it locally, so fall back to `HEAD^` or
  * the empty tree for the first commit.
+ *
+ * @returns The ID of the commit or tree to compare `HEAD` with.
  */
 function resolveBase() {
   const before = readBefore();
@@ -55,6 +59,8 @@ function resolveBase() {
 /**
  * Pending release intents are the Markdown files `pnpm change` writes directly
  * under `.changeset/`.
+ *
+ * @returns The paths of the intents.
  */
 function listPendingIntents() {
   const files = listFiles(HEAD, ".changeset/");
@@ -71,6 +77,8 @@ function listPendingIntents() {
  *
  * A push should never both open a release PR and publish a release. The release
  * PR must already include every pending intent before it can merge.
+ *
+ * @returns What to do.
  */
 function plan() {
   const pending = listPendingIntents();

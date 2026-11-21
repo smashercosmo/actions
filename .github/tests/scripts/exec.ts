@@ -10,8 +10,14 @@ interface Registry {
 }
 
 /**
- * Run git in `cwd` and return trimmed stdout. `input` is written to stdin, and
- * `env` is added to the environment.
+ * Run git in `cwd`.
+ *
+ * @param cwd Directory to run git in.
+ * @param args The arguments of git.
+ * @param options The options.
+ * @param options.input Written to stdin.
+ * @param options.env Added to the environment.
+ * @returns The trimmed stdout.
  */
 function git(
   cwd: string,
@@ -41,6 +47,10 @@ function git(
  * This must stay async: the registry runs in this same Node process, so a
  * synchronous pnpm child would block the event loop and deadlock its own HTTP
  * requests.
+ *
+ * @param cwd Directory to run pnpm in.
+ * @param args The arguments of pnpm.
+ * @param registry The mock npm registry.
  */
 async function pnpm(cwd: string, args: readonly string[], registry: Registry) {
   const child = spawn("pnpm", args, {

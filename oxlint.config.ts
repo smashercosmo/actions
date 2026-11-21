@@ -13,5 +13,6 @@ export default defineConfig({
   },
   options: {
     typeAware: true,
+    reportUnusedDisableDirectives: "error",
   },
 });

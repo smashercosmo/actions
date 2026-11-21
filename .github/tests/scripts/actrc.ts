@@ -62,7 +62,19 @@ const RELEASE_BOT_PRIVATE_KEY = generateKeyPairSync("rsa", {
  */
 const THIRD_PARTY_ACTIONS = ["actions/checkout", "pnpm/setup"];
 
-/** Builds the `act` flags that connect workflow containers to local fixtures. */
+/**
+ * Builds the `act` flags that connect workflow containers to local fixtures.
+ *
+ * @param options The options.
+ * @param options.localRepoDir Path of the consumer repository, the workflow's
+ *   working directory.
+ * @param options.remoteDir Directory of the bare remote repositories, mounted
+ *   into the containers.
+ * @param options.npmrcFile Path of the `.npmrc` with the mock registry's token.
+ * @param options.localRepositories `--local-repository` mappings of the staged
+ *   actions.
+ * @returns The flags.
+ */
 function getAdditionalArgs({
   localRepoDir,
   remoteDir,
@@ -121,6 +133,12 @@ function getAdditionalArgs({
 /**
  * Environment passed into workflow containers so Git, GitHub API calls, and
  * pnpm all use local test services.
+ *
+ * @param options The options.
+ * @param options.remoteDir Directory of the bare remote repositories.
+ * @param options.githubApiPort Port of the mock GitHub server.
+ * @param options.registryPort Port of the mock npm registry.
+ * @returns The environment variables, under `values`.
  */
 function getEnv({
   remoteDir,
@@ -167,7 +185,11 @@ function getEnv({
   };
 }
 
-/** Secrets exposed to workflow expressions during `act` runs. */
+/**
+ * Secrets exposed to workflow expressions during `act` runs.
+ *
+ * @returns The secrets, under `values`.
+ */
 function getSecrets() {
   return {
     values: {
@@ -181,7 +203,11 @@ function getSecrets() {
   };
 }
 
-/** Repository variables exposed to workflow expressions. */
+/**
+ * Repository variables exposed to workflow expressions.
+ *
+ * @returns The variables, under `values`.
+ */
 function getVariables() {
   return {
     values: {

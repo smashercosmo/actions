@@ -2,9 +2,12 @@ import { MAIN_BRANCH_NAME } from "./actrc.ts";
 import { git } from "./exec.ts";
 
 /**
- * Pushes `main` and returns the matching push event payload. `before` must come
- * from the remote ref so release planning compares the same range GitHub
- * would.
+ * Pushes `main`. `before` must come from the remote ref so release planning
+ * compares the same range GitHub would.
+ *
+ * @param options The options.
+ * @param options.repo Path of the repository.
+ * @returns The payload of the push event.
  */
 function createMockPush({ repo }: { repo: string }) {
   const ref = `refs/heads/${MAIN_BRANCH_NAME}`;

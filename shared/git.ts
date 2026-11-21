@@ -5,6 +5,9 @@ import { exec, getExecOutput } from "#shared/exec.ts";
  *
  * NUL separators are safe for every valid path, including paths that contain
  * line breaks.
+ *
+ * @param output Output of the Git command.
+ * @returns The paths in the output, without empty entries.
  */
 function splitPaths(output: string) {
   return output.split("\0").filter(Boolean);
@@ -15,6 +18,9 @@ function splitPaths(output: string) {
  *
  * Useful for revisions from event payloads, which may be missing after a
  * force-push, in a shallow checkout, or in a one-commit repository.
+ *
+ * @param rev Revision to check, e.g. a commit ID or a branch name.
+ * @returns Whether `rev` names a commit.
  */
 function isCommit(rev: string) {
   /** `^{commit}` rejects tags, trees, and blobs that happen to share a name. */
@@ -32,6 +38,9 @@ function isCommit(rev: string) {
  *
  * Only fetched tags count, so callers that need remote tags must use a full
  * checkout first.
+ *
+ * @param tag Name of the tag, without `refs/tags/`.
+ * @returns Whether the tag exists.
  */
 function hasTag(tag: string) {
   /** The full ref avoids matching a branch with the same name. */
@@ -49,6 +58,8 @@ function hasTag(tag: string) {
  *
  * Diffing against the empty tree treats every file in the first commit as
  * added.
+ *
+ * @returns The full ID of the empty tree.
  */
 function getEmptyTreeId() {
   /** Hash the empty tree without writing a new object into the repository. */
@@ -66,6 +77,10 @@ function getEmptyTreeId() {
  *
  * Paths come from the commit, not the working tree, and include the directory
  * prefix (for example, `.changeset/foo.md`).
+ *
+ * @param rev Commit to read the directory from.
+ * @param directory Directory to list, with a trailing slash.
+ * @returns The paths of the files and directories.
  */
 function listFiles(rev: string, directory: `${string}/`) {
   const { stdout } = getExecOutput(
@@ -81,6 +96,11 @@ function listFiles(rev: string, directory: `${string}/`) {
  * Checks whether `file` changed between `from` and `to`.
  *
  * Git uses exit code 1 to mean "different", so only codes above 1 are errors.
+ *
+ * @param from Commit to compare from.
+ * @param to Commit to compare to.
+ * @param file Path of the file.
+ * @returns Whether the file differs between the two commits.
  */
 function hasFileChanged(from: string, to: string, file: string) {
   const exitCode = exec("git", ["diff", "--quiet", from, to, "--", file], {
@@ -99,6 +119,11 @@ function hasFileChanged(from: string, to: string, file: string) {
  * (e.g. `.changeset/*.md`).
  *
  * Modified, renamed, and deleted files are ignored.
+ *
+ * @param from Commit to compare from.
+ * @param to Commit to compare to.
+ * @param pathspecs Pathspecs the files have to match.
+ * @returns The paths of the added files.
  */
 function listAddedFiles(
   from: string,
@@ -124,26 +149,39 @@ function listAddedFiles(
 }
 
 /**
- * Lists files staged for the next commit, excluding deleted files.
+ * Lists files that differ from `HEAD`, staged or not, plus untracked files,
+ * excluding deleted files and files Git ignores.
  *
- * Every returned path refers to a file that exists in the working tree.
+ * @returns The paths of the files, tracked ones first.
  */
-function listStagedFiles() {
-  /** Lowercase `d` excludes deletions while keeping every other change type. */
-  const { stdout } = getExecOutput(
+function listChangedFiles() {
+  /**
+   * Diffing against `HEAD` covers staged and unstaged changes. Lowercase `d`
+   * excludes deleted files.
+   */
+  const { stdout: tracked } = getExecOutput(
     "git",
-    ["diff", "--staged", "--name-only", "--diff-filter=d", "-z"],
+    ["diff", "HEAD", "--name-only", "--diff-filter=d", "-z"],
+    { silent: true },
+  );
+  /** `git diff` skips untracked files (e.g. newly created ones) */
+  const { stdout: untracked } = getExecOutput(
+    "git",
+    ["ls-files", "--others", "--exclude-standard", "-z"],
     { silent: true },
   );
 
-  return splitPaths(stdout);
+  return [...splitPaths(tracked), ...splitPaths(untracked)];
 }
 
 /**
  * Returns the full ID of the object `rev` names, e.g. `HEAD` for the commit or
  * `HEAD^{tree}` for its tree.
+ *
+ * @param rev Revision naming the object.
+ * @returns The full ID of the object.
  */
-function getObjectId(rev: string) {
+function resolveId(rev: string) {
   const { stdout } = getExecOutput("git", ["rev-parse", "--verify", rev], {
     silent: true,
   });
@@ -165,6 +203,8 @@ interface StagedChange {
  *
  * Rename detection is off, so a renamed file comes out as a deletion and an
  * addition, and each change is about one path.
+ *
+ * @returns The staged changes, one per path.
  */
 function listStagedChanges(): StagedChange[] {
   /**
@@ -201,6 +241,9 @@ function listStagedChanges(): StagedChange[] {
  * Returns the content of the blob `id` as text.
  *
  * The content is decoded as UTF-8, so it's only for text files.
+ *
+ * @param id ID of the blob.
+ * @returns The content of the blob.
  */
 function readBlob(id: string) {
   return getExecOutput("git", ["cat-file", "blob", id], { silent: true })
@@ -211,7 +254,11 @@ function readBlob(id: string) {
  * Finds the most recent commit that added or removed `text` in `file`.
  *
  * When `file` still contains `text`, that commit introduced the current
- * occurrence. Returns `undefined` when no matching commit is found.
+ * occurrence.
+ *
+ * @param text Text to look for.
+ * @param file Path of the file to search the history of.
+ * @returns The full ID of the commit, or `undefined` when no commit matches.
  */
 function findLastCommitChanging(text: string, file: string) {
   const { stdout } = getExecOutput(
@@ -227,13 +274,13 @@ function findLastCommitChanging(text: string, file: string) {
 export {
   findLastCommitChanging,
   getEmptyTreeId,
-  getObjectId,
   hasFileChanged,
   hasTag,
   isCommit,
   listAddedFiles,
+  listChangedFiles,
   listFiles,
   listStagedChanges,
-  listStagedFiles,
   readBlob,
+  resolveId,
 };

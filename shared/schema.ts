@@ -58,6 +58,9 @@ type ObjectOutput<TShape> = {
 /**
  * Describes only the value type for errors, never the value itself, because API
  * responses can contain secrets.
+ *
+ * @param value Value that failed validation.
+ * @returns The type of the value, e.g. `an array`.
  */
 function describe(value: unknown) {
   if (value === null) {
@@ -98,7 +101,11 @@ function boolean(): Schema<boolean> {
     typeof value === "boolean" ? value : fail(path, "a boolean", value);
 }
 
-/** Absolute URL string, for example `https://github.com/octocat`. */
+/**
+ * Absolute URL string, for example `https://github.com/octocat`.
+ *
+ * @returns The schema.
+ */
 function url(): Schema<string> {
   return (value, path) =>
     typeof value === "string" && URL.canParse(value)
@@ -106,7 +113,12 @@ function url(): Schema<string> {
       : fail(path, "a URL", value);
 }
 
-/** Array whose every item matches `item`. */
+/**
+ * Array whose every item matches `item`.
+ *
+ * @param item Schema of the items.
+ * @returns The schema.
+ */
 function array<TOutput, TInput>(
   item: Schema<TOutput, TInput>,
 ): Schema<TOutput[], readonly TInput[]> {
@@ -119,6 +131,9 @@ function array<TOutput, TInput>(
 /**
  * Object with the checked properties from `shape`. Extra input properties are
  * deliberately dropped so callers only receive validated data.
+ *
+ * @param shape Schema of each property.
+ * @returns The schema.
  */
 function object<
   TShape extends Readonly<Record<string, Schema<unknown, unknown>>>,
@@ -141,7 +156,12 @@ function object<
   };
 }
 
-/** Allows a value to be omitted or explicitly `undefined`. */
+/**
+ * Allows a value to be omitted or explicitly `undefined`.
+ *
+ * @param schema Schema of the value when it's there.
+ * @returns The schema.
+ */
 function optional<TOutput, TInput>(
   schema: Schema<TOutput, TInput>,
 ): Schema<TOutput | undefined, TInput | undefined> {
@@ -149,7 +169,14 @@ function optional<TOutput, TInput>(
     value === undefined ? undefined : schema(value, path);
 }
 
-/** Adds source context, such as `GitHub API GET /user`, to schema failures. */
+/**
+ * Adds source context, such as `GitHub API GET /user`, to schema failures.
+ *
+ * @param schema Schema to validate the value with.
+ * @param value Value to validate.
+ * @param label Where the value comes from, for the error message.
+ * @returns The validated value.
+ */
 function parse<TOutput>(
   schema: Schema<TOutput, unknown>,
   value: unknown,
