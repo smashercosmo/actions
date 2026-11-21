@@ -7,12 +7,22 @@ import { array, number, object } from "./schema.ts";
 
 const PullRequestSchema = object({ number: number() });
 
-/** Stub `fetch` so tests never go online. */
+/**
+ * Stub `fetch` so tests never go online.
+ *
+ * @param response Response every call resolves to.
+ * @returns The spy on `fetch`.
+ */
 function mockFetch(response: Response) {
   return vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
 }
 
-/** Rebuilds the `Request` object from the arguments passed to `fetch`. */
+/**
+ * Rebuilds the `Request` object from the arguments passed to `fetch`.
+ *
+ * @param fetchSpy The spy on `fetch`.
+ * @returns The request of the first call.
+ */
 function getRequest(fetchSpy: MockInstance<typeof fetch>) {
   const [call] = fetchSpy.mock.calls;
 
@@ -23,7 +33,11 @@ function getRequest(fetchSpy: MockInstance<typeof fetch>) {
   return new Request(...call);
 }
 
-/** Delete runner-like env vars even when tests run inside GitHub Actions. */
+/**
+ * Delete runner-like env vars even when tests run inside GitHub Actions.
+ *
+ * @param name Name of the env variable.
+ */
 function unsetEnv(name: string) {
   // oxlint-disable-next-line unicorn/no-useless-undefined -- `undefined` is how Vitest is told to delete the variable, and the argument can't be left out.
   vi.stubEnv(name, undefined);

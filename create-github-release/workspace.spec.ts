@@ -10,6 +10,8 @@ import { listWorkspacePackages } from "./workspace.ts";
 /**
  * Copies the fixture workspace to a temporary cwd so pnpm sees a real workspace
  * without mutating the fixture.
+ *
+ * @returns The temporary directory, now the cwd.
  */
 function copyFixture() {
   const directory = fs.realpathSync(

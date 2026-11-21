@@ -20,7 +20,12 @@ const SELF_REFERENCE = /(?<uses>\buses:\s*)\$\/(?<path>\S+)/gv;
  */
 const CONCURRENCY_QUEUE = /^[\t ]*queue:[\t ]*(?:max|single)[\t ]*\n/gmv;
 
-/** Lists workflow and action YAML files under `dir`. */
+/**
+ * Lists workflow and action YAML files under `dir`.
+ *
+ * @param dir Directory to search, recursively.
+ * @returns The paths of the files.
+ */
 function listYamlFiles(dir: string) {
   return fs
     .readdirSync(dir, { recursive: true, encoding: "utf8" })
@@ -34,6 +39,8 @@ function listYamlFiles(dir: string) {
  * GitHub supports `uses: $/<path>` in reusable workflows; act does not. Rewrite
  * those references to an explicit local repository ref that act can map with
  * `--local-repository`.
+ *
+ * @returns The temporary directory with the copy.
  */
 function copyWorkingTree() {
   /** Resolve macOS tmpdir symlinks so Docker sees the same paths. */
@@ -83,8 +90,10 @@ function copyWorkingTree() {
 }
 
 /**
- * Returns the staged repo plus the act mapping that routes this repo's action
- * calls to it.
+ * Stages this actions repo for act.
+ *
+ * @returns The staged repo plus the act mapping that routes this repo's action
+ *   calls to it.
  */
 function stageActionsRepo() {
   const dir = copyWorkingTree();

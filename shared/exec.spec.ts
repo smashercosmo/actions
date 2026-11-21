@@ -19,7 +19,11 @@ const ARGS_SCRIPT = "JSON.stringify(process.argv.slice(1))";
 /** Script fixture that echoes stdin. */
 const STDIN_SCRIPT = "process.stdin.pipe(process.stdout)";
 
-/** Capture logs so assertions can inspect them without noisy test output. */
+/**
+ * Capture logs so assertions can inspect them without noisy test output.
+ *
+ * @returns The spy on `process.stdout.write`.
+ */
 function spyOnStdout() {
   return vi.spyOn(process.stdout, "write").mockReturnValue(true);
 }

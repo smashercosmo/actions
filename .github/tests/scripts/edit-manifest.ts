@@ -12,7 +12,14 @@ const ManifestSchema = z.looseObject({
 
 type Manifest = z.infer<typeof ManifestSchema>;
 
-/** Edits and commits a package manifest in the mock repository. */
+/**
+ * Edits and commits a package manifest in the mock repository.
+ *
+ * @param options The options.
+ * @param options.repo Path of the repository.
+ * @param options.dir Directory of the package, relative to `repo`.
+ * @param options.edit Returns the edited manifest.
+ */
 function editManifest({
   repo,
   dir,
@@ -30,7 +37,12 @@ function editManifest({
   git(repo, ["commit", "-am", "chore: edit package.json"]);
 }
 
-/** Replaces a package script with a failing command. */
+/**
+ * Replaces a package script with a failing command.
+ *
+ * @param script Name of the script.
+ * @returns An `edit` function for `editManifest`.
+ */
 function failScript(script: string) {
   return (manifest: Manifest): Manifest => ({
     ...manifest,

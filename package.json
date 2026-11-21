@@ -16,7 +16,7 @@
     "@octokit/types": "18.0.0",
     "@octokit/webhooks-types": "7.6.1",
     "@pnpm/releasing.versioning": "1100.3.9",
-    "@smashercosmo/configs": "0.2.0",
+    "@smashercosmo/configs": "0.3.0",
     "@types/node": "26.6.6",
     "act-test-runner": "2.0.0",
     "eslint-plugin-regexp": "3.3.3",

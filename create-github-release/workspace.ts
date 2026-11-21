@@ -21,7 +21,11 @@ const WorkspacePackageSchema = object({
 
 const WorkspacePackagesSchema = array(WorkspacePackageSchema);
 
-/** Lists workspace packages without their dependency trees. */
+/**
+ * Lists workspace packages without their dependency trees.
+ *
+ * @returns The packages of the workspace.
+ */
 function listWorkspacePackages() {
   const { stdout } = getExecOutput(
     "pnpm",

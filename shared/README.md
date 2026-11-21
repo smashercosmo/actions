@@ -107,12 +107,12 @@ Asks Git about the repository in the current directory. Each function wraps a si
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `isCommit(rev)`                       | Tells whether `rev` names a commit that exists locally. For a commit that may be missing, e.g. after a force-push or in a shallow clone. |
 | `hasTag(tag)`                         | Tells whether the tag exists locally. A checkout has to fetch the tags first.                                                            |
-| `getObjectId(rev)`                    | Returns the full ID of the object `rev` names, e.g. `HEAD` or `HEAD^{tree}`.                                                             |
+| `resolveId(rev)`                      | Returns the full ID of the object `rev` names, e.g. `HEAD` or `HEAD^{tree}`.                                                             |
 | `getEmptyTreeId()`                    | Returns the ID of the empty tree, which stands in for the parent of the first commit.                                                    |
 | `listFiles(rev, directory)`           | Lists what's directly in `directory` in the commit `rev`, regardless of the working tree.                                                |
 | `hasFileChanged(from, to, file)`      | Tells whether `file` differs between two commits.                                                                                        |
 | `listAddedFiles(from, to, pathspecs)` | Lists the files added between two commits that match the pathspecs.                                                                      |
-| `listStagedFiles()`                   | Lists the files staged for the next commit, except the deleted ones.                                                                     |
+| `listChangedFiles()`                  | Lists the files that differ from `HEAD`, staged or not, and the untracked ones, except the deleted and ignored ones.                     |
 | `listStagedChanges()`                 | Lists the changes staged for the next commit: each path with its mode and staged blob, or no blob if it's deleted.                       |
 | `readBlob(id)`                        | Returns the content of a blob as UTF-8 text.                                                                                             |
 | `findLastCommitChanging(text, file)`  | Finds the most recent commit that added or removed `text` in `file`, or returns `undefined`.                                             |
@@ -127,7 +127,7 @@ const intents = listAddedFiles("HEAD^1", "HEAD", [".changeset/*.md"]);
 
 The functions that list paths run Git with `-z`, so paths with spaces, line breaks or non-ASCII characters come back as they are.
 
-`hasFileChanged`, `listAddedFiles` and `listStagedFiles` compare with Git's rename detection on, its default: a file added with the same content as one deleted counts as a rename, not an addition. `listStagedChanges` turns it off, so a rename comes out as a deletion and an addition.
+`hasFileChanged`, `listAddedFiles` and `listChangedFiles` compare with Git's rename detection on, its default: a file added with the same content as one deleted counts as a rename, not an addition. `listStagedChanges` turns it off, so a rename comes out as a deletion and an addition.
 
 The functions throw if Git fails, e.g. on a commit that doesn't exist, except `isCommit` and `hasTag`, which answer `false` then.
 

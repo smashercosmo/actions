@@ -20,6 +20,9 @@ import {
 /**
  * Parses a runner command file, such as `GITHUB_OUTPUT`, into `[name, value]`
  * pairs using the same heredoc form the helpers write.
+ *
+ * @param filePath Path of the command file.
+ * @returns The entries of the file, in order.
  */
 function readCommandFile(filePath: string) {
   const lines = fs.readFileSync(filePath, "utf8").split(EOL);
@@ -46,6 +49,8 @@ function readCommandFile(filePath: string) {
 /**
  * Creates a temporary runner command file such as `GITHUB_OUTPUT` or
  * `GITHUB_STATE`.
+ *
+ * @returns The path of the file, deleted when the test finishes.
  */
 function createCommandFile() {
   const directory = fs.mkdtempSync(path.join(tmpdir(), "shared-core-"));
@@ -59,12 +64,20 @@ function createCommandFile() {
   return filePath;
 }
 
-/** Capture stdout so assertions can inspect workflow commands. */
+/**
+ * Capture stdout so assertions can inspect workflow commands.
+ *
+ * @returns The spy on `process.stdout.write`.
+ */
 function spyOnStdout() {
   return vi.spyOn(process.stdout, "write").mockReturnValue(true);
 }
 
-/** Delete runner-like env vars even when tests run inside GitHub Actions. */
+/**
+ * Delete runner-like env vars even when tests run inside GitHub Actions.
+ *
+ * @param name Name of the env variable.
+ */
 function unsetEnv(name: string) {
   // oxlint-disable-next-line unicorn/no-useless-undefined -- `undefined` is how Vitest is told to delete the variable, and the argument can't be left out.
   vi.stubEnv(name, undefined);

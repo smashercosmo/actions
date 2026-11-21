@@ -21,6 +21,9 @@ const STATUSES = new Set<string>(Object.values(ActExecStatus));
 /**
  * Act-test-runner records `pre`, `main`, and `post` phases; phases that did not
  * execute have no valid status.
+ *
+ * @param step Result of a step phase.
+ * @returns Whether the phase ran.
  */
 function hasRun(step: ActStepExecResult) {
   return STATUSES.has(step.status);
@@ -29,6 +32,9 @@ function hasRun(step: ActStepExecResult) {
 /**
  * Summary included in assertion errors so failed workflow tests show the jobs,
  * steps, and failed step output.
+ *
+ * @param result Result of the workflow run.
+ * @returns The summary, one line per job and step.
  */
 function describeRun(result: ActWorkflowExecResult) {
   const jobs = Object.values(result.jobs);
@@ -57,6 +63,11 @@ function describeRun(result: ActWorkflowExecResult) {
 /**
  * Finds a step result and includes the full workflow summary when it is
  * missing.
+ *
+ * @param result Result of the workflow run.
+ * @param job ID of the job.
+ * @param name Name of the step.
+ * @returns The result of the step.
  */
 function getStep(result: ActWorkflowExecResult, job: string, name: string) {
   const step = result.jobs[job]?.steps.find(
@@ -72,7 +83,12 @@ function getStep(result: ActWorkflowExecResult, job: string, name: string) {
   return step;
 }
 
-/** Assert the workflow result with the run summary attached on failure. */
+/**
+ * Assert the workflow result with the run summary attached on failure.
+ *
+ * @param result Result of the workflow run.
+ * @param expected Status the run should have.
+ */
 function assertStatus(result: ActWorkflowExecResult, expected: ActExecStatus) {
   if (result.status !== expected) {
     throw new Error(
@@ -93,6 +109,9 @@ function assertStatus(result: ActWorkflowExecResult, expected: ActExecStatus) {
  * - `act`: factory for a fresh `ActRunner` wired to the mock services.
  *
  * Fixtures are isolated per test and automatically torn down after execution.
+ *
+ * @param base The `it` to extend.
+ * @returns The `it` with the fixtures.
  */
 function withWorkflowFixtures(base: TestAPI) {
   return (

@@ -48,7 +48,8 @@ type Data<TRoute extends Route> = Endpoints[TRoute]["response"]["data"];
 type ResponseData<TRoute extends Route> =
   Data<TRoute> extends readonly (infer TItem)[]
     ? Partial<TItem>[]
-    : Partial<Data<TRoute>>;
+    : // oxlint-disable-next-line typescript/no-generated-empty-object-type -- `TRoute` is still generic here, so the rule can't see the properties. Every concrete route gives an object type with the endpoint's fields.
+      Partial<Data<TRoute>>;
 
 interface MockRequest {
   params: Record<string, string>;
@@ -152,6 +153,9 @@ function getReleaseUrl(tag: string) {
 /**
  * Extracts the auth token and normalizes GitHub App JWTs, whose timestamps and
  * signatures change on every request.
+ *
+ * @param request Request to read the `authorization` header of.
+ * @returns The token, or `app-jwt` for a JWT.
  */
 function getToken(request: Request) {
   const [, token = ""] = (request.headers.get("authorization") ?? "").split(
@@ -161,7 +165,14 @@ function getToken(request: Request) {
   return token.split(".").length === 3 ? "app-jwt" : token;
 }
 
-/** Registers a typed MSW handler for one GitHub REST endpoint. */
+/**
+ * Registers a typed MSW handler for one GitHub REST endpoint.
+ *
+ * @param route Method and path template of the endpoint, as Octokit types it.
+ * @param status Status of the response.
+ * @param resolve Returns the body of the response, or `undefined` for none.
+ * @returns The MSW handler.
+ */
 function mockEndpoint<TRoute extends Route>(
   route: TRoute,
   status: number,
@@ -205,6 +216,10 @@ function mockEndpoint<TRoute extends Route>(
  *
  * Git database requests and creating a release write to the consumer's bare
  * remote, just like GitHub does.
+ *
+ * @param options The options.
+ * @param options.remoteRepoDir Path of the consumer's bare remote repository.
+ * @returns The port of the server, what it recorded, and a `close` function.
  */
 async function createMockGitHubServer({
   remoteRepoDir,
@@ -400,7 +415,12 @@ async function createMockGitHubServer({
     }),
   ];
 
-  /** Convert Node HTTP requests into Fetch requests so MSW can route them. */
+  /**
+   * Convert Node HTTP requests into Fetch requests so MSW can route them.
+   *
+   * @param incoming Request the Node server received.
+   * @returns The response of the matching handler, or a 404 one.
+   */
   async function respond(incoming: IncomingMessage) {
     const method = incoming.method ?? "GET";
     const url = new URL(incoming.url ?? "/", "http://github.mock");
@@ -440,6 +460,9 @@ async function createMockGitHubServer({
   /**
    * Turn mock failures, including schema validation errors, into HTTP responses
    * the action can print in its own logs.
+   *
+   * @param incoming Request the Node server received.
+   * @param outgoing Response to write to.
    */
   async function handle(incoming: IncomingMessage, outgoing: ServerResponse) {
     try {

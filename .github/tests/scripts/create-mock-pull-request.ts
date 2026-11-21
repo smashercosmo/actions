@@ -2,9 +2,15 @@ import { MAIN_BRANCH_NAME } from "./actrc.ts";
 import { git } from "./exec.ts";
 
 /**
- * Creates GitHub's synthetic PR merge commit and returns a pull request event
- * payload. The mock remote has no GitHub server to maintain
- * `refs/pull/<number>/merge`, so tests create it directly.
+ * Creates GitHub's synthetic PR merge commit. The mock remote has no GitHub
+ * server to maintain `refs/pull/<number>/merge`, so tests create it directly.
+ *
+ * @param options The options.
+ * @param options.repo Path of the repository.
+ * @param options.branch Head branch of the PR, merged into `main`.
+ * @param options.number Number of the PR.
+ * @param options.author Login of the PR's author.
+ * @returns The payload of the pull request event.
  */
 function createMockPullRequest({
   repo,

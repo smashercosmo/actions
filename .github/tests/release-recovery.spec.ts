@@ -24,7 +24,12 @@ const it = withWorkflowFixtures(base);
 
 /**
  * Builds and merges the release PR, leaving only the merge commit unpushed.
- * Returns the push event of the change intent the release PR consumed.
+ *
+ * @param options The options.
+ * @param options.repo Path of the consumer repository.
+ * @param options.registry The mock npm registry.
+ * @param options.summary Summary of the change intent.
+ * @returns The push event of the change intent the release PR consumed.
  */
 async function prepareReleaseMerge({
   repo,

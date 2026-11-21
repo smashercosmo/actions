@@ -20,6 +20,11 @@ const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/consumer");
  *
  * The baseline package version is published and tagged first so release tests
  * start from a realistic "1.0.0 already released" state.
+ *
+ * @param options The options.
+ * @param options.registry The mock npm registry to publish 1.0.0 to.
+ * @returns The paths of the working tree and of the remote, and a `cleanup`
+ *   function that deletes both.
  */
 async function createMockGitRepo({ registry }: { registry: Registry }) {
   /** Resolve macOS tmpdir symlinks so Docker can mount the same path. */
