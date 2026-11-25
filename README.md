@@ -15,10 +15,11 @@ This repository provides reusable actions and workflows for managing releases. T
 
 The repository also provides reusable workflows that combine these actions:
 
-| Workflow                                         | Description                                                                                                                                           |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`ci.yml`](./.github/workflows/ci.yml)           | Checks that pull requests include a change intent, then builds, lints, checks formatting, and runs tests.                                             |
-| [`release.yml`](./.github/workflows/release.yml) | Creates or updates the release PR, stages packages on npm after the release PR is merged, and publishes GitHub releases once the versions are on npm. |
+| Workflow                                         | Description                                                                                                                                            |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`ci.yml`](./.github/workflows/ci.yml)           | Checks that pull requests include a change intent, then builds, lints, checks formatting, and runs tests.                                              |
+| [`release.yml`](./.github/workflows/release.yml) | Creates or updates the release PR, stages packages on npm after the release PR is merged, and publishes GitHub releases once the versions are on npm.  |
+| [`pages.yml`](./.github/workflows/pages.yml)     | Builds a static site, such as the docs of a package, and deploys it to GitHub Pages. `release.yml` uses it to deploy the docs of the released version. |
 
 ## Usage
 
@@ -154,6 +155,12 @@ Example:
 | `npm`              | no       | Create the release of a public package only once its version is on npm. Defaults to `false`. Private packages are never on npm, so they are released right away.                 |
 | `npm-wait-minutes` | no       | How long to wait for package versions to appear on npm, checking every 30 seconds. Defaults to `0`, which checks once. Only used when `npm` is enabled.                          |
 
+**Outputs**
+
+| Output | Description                                                                                                                                                                                          |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tag`  | Tag of the current version, `v<version>`, once its release exists, whether this run created it or an earlier one did. Empty while the version isn't on npm yet, and when no package needs a release. |
+
 ### require-change-intent
 
 Checks that a pull request adds a change intent to `.changeset/`.
@@ -258,13 +265,14 @@ Use both names as required status checks in the main branch ruleset.
 
 A reusable workflow that handles the release process.
 
-It is intended to run on every push to `main`. Depending on the changes, it either creates or updates a release PR, prepares a release after that PR is merged, or does nothing. On every run, it also publishes the GitHub release of the current version if there's none yet.
+It is intended to run on every push to `main`. Depending on the changes, it either creates or updates a release PR, prepares a release after that PR is merged, or does nothing. On every run, it also publishes the GitHub release of the current version if there's none yet and, with `docs: true`, deploys the docs of the released version to GitHub Pages.
 
 **What happens on each push to `main`**
 
 - **Pending change intents exist:** Opens or updates the release PR using `create-release-pr`. The changed files are formatted with `pnpm format`.
 - **A release PR was just merged, or the workflow was started manually:** When `npm: true`, runs `ci.yml` against the commit being released, builds the packages in `./packages/*`, and stages them on npm using `pnpm stage publish -r`.
 - **Always:** Publishes the GitHub release of the current version using `create-github-release`, unless it exists already. Publishing it creates the corresponding Git tag.
+- **Always, with `docs: true`:** Deploys the docs of the released version to GitHub Pages using `pages.yml`. See **Docs** below.
 
 **Releases and npm approval**
 
@@ -274,7 +282,15 @@ If the approval comes later, the run still succeeds, with a warning. The next ru
 
 While the run of the merge waits, it holds the concurrency group, so other runs wait in the queue.
 
-The releases are created with `GITHUB_TOKEN`, so they don't trigger other workflows, such as one that runs `on: release`. To run something after a release, add a job to the calling workflow with `needs: release`.
+The releases are created with `GITHUB_TOKEN`, so they don't trigger other workflows, such as one that runs `on: release`. To run something after a release, add a job to the calling workflow with `needs: release`. That job runs after every run of the workflow, not only the one that released the version. The `tag` output says which version is released: it's the tag of the current version once its release exists, and empty while the version isn't on npm yet.
+
+**Docs**
+
+With `docs: true`, every run ends by deploying the docs site of the released version to GitHub Pages with [`pages.yml`](#pagesyml). The site is built from the commit of the version's `v<version>` tag, not from the commit of the run, so it never shows changes that aren't on npm yet. While a new version waits for its approval, nothing is deployed, and the site keeps the docs of the previous release.
+
+Every run deploys the docs again, even when they didn't change, so the next push or a manual run retries a deployment that failed.
+
+By default, the site is built with `pnpm --filter docs... build`, which builds the workspace package named `docs` and the workspace packages it depends on, and is deployed from `apps/docs/dist`. `docs-build-command` and `docs-path` change both. The repository has to be set up for Pages, as described in [`pages.yml`](#pagesyml).
 
 **Important: Do not merge the release PR while pending change intents are present.**
 
@@ -299,10 +315,12 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      pages: write
     uses: smashercosmo/actions/.github/workflows/release.yml@<commit hash>
     with:
       app-client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
       npm: true
+      docs: true
     secrets:
       app-private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
 ```
@@ -317,7 +335,7 @@ The calling workflow must not define an additional concurrency group inside the 
 
 The calling job defines the maximum permissions that jobs inside the reusable workflow can receive. Each individual job then requests only the permissions it needs.
 
-Allow `id-token: write` even when `npm` is disabled. GitHub checks the permissions of every job when the workflow run starts, including jobs that will later be skipped.
+Allow `id-token: write` and `pages: write` even when `npm` and `docs` are disabled. GitHub checks the permissions of every job when the workflow run starts, including jobs that will later be skipped, and refuses to start the run if the calling job doesn't allow them.
 
 **GitHub App and npm configuration**
 
@@ -345,12 +363,62 @@ The private key can be stored as a secret in the `release` environment. Secrets 
 | `include-private`      | no       | Whether to also create releases for private packages that have a version. Defaults to `false`.                                                     |
 | `playwright-browsers`  | no       | Playwright browsers passed to `ci.yml`. See the CI workflow documentation. Only used when `npm` is enabled.                                        |
 | `npm-approval-timeout` | no       | Minutes the run of the merge waits for the staged versions to be approved on npm. Defaults to `10`, at most `20`. Only used when `npm` is enabled. |
+| `docs`                 | no       | Whether to deploy the docs site of the released version to GitHub Pages after every run. Defaults to `false`.                                      |
+| `docs-build-command`   | no       | Command that builds the docs site. Defaults to `pnpm --filter docs... build`. Only used when `docs` is enabled.                                    |
+| `docs-path`            | no       | Directory of the built docs site, relative to the root of the repository. Defaults to `apps/docs/dist`. Only used when `docs` is enabled.          |
 
 **Secrets**
 
 | Secret            | Required | Description                                                |
 | ----------------- | -------- | ---------------------------------------------------------- |
 | `app-private-key` | yes      | Private key of the GitHub App used to open the release PR. |
+
+**Outputs**
+
+| Output | Description                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tag`  | Tag of the current version, `v<version>`, once its GitHub release exists, whether this run created it or an earlier one did. Empty while the version isn't on npm yet. |
+
+### pages.yml
+
+A reusable workflow that builds a static site, such as the docs of a package, and deploys it to GitHub Pages. `release.yml` calls it when `docs` is enabled. Call it directly to deploy a site some other way, e.g. by hand.
+
+It has two jobs:
+
+- **`build`** checks out `ref`, installs the dependencies with `pnpm install`, runs `build-command` and uploads the `path` directory. It runs the code of the dependencies, so it gets read-only permissions.
+- **`deploy`** deploys the uploaded site in the `github-pages` environment. Deployments run one at a time: a newer one waits for the one in progress instead of cancelling it.
+
+**Repository setup**
+
+- Deploy Pages from GitHub Actions: **Settings → Pages → Source → GitHub Actions**.
+- The deployment branches and tags of the `github-pages` environment must allow the ref the calling run starts on, e.g. `main` for `release.yml`. That's the ref of the run, not the `ref` input that is built.
+
+Example calling workflow, which deploys the branch or tag picked when it's started by hand. The `github-pages` environment has to allow that branch or tag too:
+
+```yaml
+name: Docs
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  docs:
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: smashercosmo/actions/.github/workflows/pages.yml@<commit hash>
+```
+
+**Inputs**
+
+| Input           | Required | Description                                                                                                                           |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `ref`           | no       | Branch, tag or commit to build, e.g. `refs/tags/v1.0.0`. Defaults to the commit the run started on.                                   |
+| `build-command` | no       | Command that builds the site. It runs in the root of the repository, after `pnpm install`. Defaults to `pnpm --filter docs... build`. |
+| `path`          | no       | Directory of the built site, relative to the root of the repository. Defaults to `apps/docs/dist`.                                    |
 
 ## Development
 

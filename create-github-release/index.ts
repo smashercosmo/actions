@@ -7,6 +7,7 @@ import {
   getInput,
   info,
   setFailed,
+  setOutput,
   warning,
 } from "#shared/core.ts";
 import { findLastCommitChanging, hasTag } from "#shared/git.ts";
@@ -142,7 +143,12 @@ try {
     userAgent: "create-github-release",
   });
 
-  await Promise.all(
+  /**
+   * The tag of each package's release once the release exists, whether it
+   * existed already or was created now. A version that isn't on npm yet has
+   * none.
+   */
+  const tags = await Promise.all(
     releasablePackages.map(
       async ({ name, version, packagePath, isPrivate }) => {
         const tag = `v${version}`;
@@ -153,7 +159,7 @@ try {
          */
         if (hasTag(tag)) {
           info(`Release ${tag} already exists, skipping`);
-          return;
+          return tag;
         }
 
         /**
@@ -198,9 +204,14 @@ try {
         );
 
         info(`Created release ${release.html_url}`);
+
+        return tag;
       },
     ),
   );
+
+  /** There's one releasable package at most, so there's one tag at most. */
+  setOutput("tag", tags.find((tag) => tag !== undefined) ?? "");
 } catch (error) {
   setFailed(error instanceof Error ? error.message : String(error));
 }

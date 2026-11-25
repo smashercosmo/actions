@@ -1,0 +1,86 @@
+name: Pages
+
+# Reusable workflow that builds a static site, such as the docs of a package,
+# and deploys it to GitHub Pages. `release.yml` calls it with `docs: true`,
+# passing the tag of the released version, so the site always matches the
+# version on npm.
+#
+# The repository must deploy Pages from GitHub Actions: Settings → Pages →
+# Source → "GitHub Actions". The deployment runs in the `github-pages`
+# environment, whose deployment branches and tags must allow the ref of the
+# calling run, e.g. `main`. That's the ref the run started on, not the `ref`
+# input that is built.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build, e.g. `refs/tags/v1.0.0`. Defaults to the commit the run started on
+        type: string
+        default: ""
+      build-command:
+        description: Command that builds the site. Runs in the root of the repository after `pnpm install`
+        type: string
+        default: pnpm --filter docs... build
+      path:
+        description: Directory of the built site, relative to the root of the repository
+        type: string
+        default: apps/docs/dist
+
+permissions: {}
+
+jobs:
+  # Runs dependency code while installing and building, so it gets read access
+  # only. Deploying is left to the next job.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # `configure-pages` reads the Pages settings of the repository.
+      pages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+
+      - uses: pnpm/setup@731dfb6463bbd11c11fd0ee11fe00ed0e36d48a1 # v3.2.0
+        with:
+          require-lockfile: true
+
+      # Expanding the input inside the script would be template injection, so
+      # the script stays fixed and reads the command from the environment.
+      - name: Build the site
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: eval "$BUILD_COMMAND"
+
+      # Fails early, with an explanation, when the repository doesn't deploy
+      # Pages from GitHub Actions.
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ inputs.path }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      # `deploy-pages` proves with an OIDC token that the artifact comes from
+      # this run.
+      id-token: write
+    # One deployment at a time: a newer one waits instead of cancelling the one
+    # in progress. Only the deployments wait for each other, builds run side by
+    # side.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

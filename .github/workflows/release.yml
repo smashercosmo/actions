@@ -8,6 +8,12 @@ name: Release
 #
 # Every run also tries to create missing GitHub releases. With `npm` enabled,
 # public package releases wait until the version is approved and visible on npm.
+# With `docs` enabled, every run then deploys the docs of the released version
+# to GitHub Pages.
+#
+# Every caller has to allow `pages: write`, even with `docs` disabled: GitHub
+# checks the permissions of every job when the run starts, including the jobs
+# that will be skipped.
 #
 # Require release PR branches to be up to date before merging, so newer change
 # intents cannot be skipped by an older release PR.
@@ -35,10 +41,26 @@ on:
         description: Minutes to wait, after staging, for the staged versions to be approved on npm before giving up. At most 20. Only used when `npm` is enabled
         type: number
         default: 10
+      docs:
+        description: After every run, build the docs site from the tag of the released version and deploy it to GitHub Pages
+        type: boolean
+        default: false
+      docs-build-command:
+        description: Command that builds the docs site. Only used when `docs` is enabled
+        type: string
+        default: pnpm --filter docs... build
+      docs-path:
+        description: Directory of the built docs site, relative to the root of the repository. Only used when `docs` is enabled
+        type: string
+        default: apps/docs/dist
     secrets:
       app-private-key:
         description: Private key of the GitHub App that opens the release PR
         required: true
+    outputs:
+      tag:
+        description: Tag of the current version, `v<version>`, once its GitHub release exists, whether this run created it or an earlier one did. Empty while the version isn't on npm yet
+        value: ${{ jobs.release.outputs.tag }}
 
 permissions: {}
 
@@ -151,6 +173,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
     steps:
       # Full history finds the version commit; tags make release creation idempotent.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -162,10 +186,32 @@ jobs:
         with:
           require-lockfile: true
 
-      - name: Create GitHub releases
+      - id: release
+        name: Create GitHub releases
         uses: $/create-github-release
         with:
           token: ${{ github.token }}
           include-private: ${{ inputs.include-private }}
           npm: ${{ inputs.npm }}
           npm-wait-minutes: ${{ needs.publish.result == 'success' && inputs.npm-approval-timeout || 0 }}
+
+  # Deploy the docs of the released version, built from its tag, so the site
+  # never shows changes that aren't on npm yet. Every run deploys them, whether
+  # this run released the version or an earlier one did, so the next push
+  # retries a failed deployment. Nothing is deployed while the version waits
+  # for npm.
+  #
+  # The releases are created with `GITHUB_TOKEN`, which doesn't trigger other
+  # workflows, so a workflow that runs `on: release` can't do this instead.
+  docs:
+    needs: release
+    if: ${{ !cancelled() && inputs.docs && needs.release.result == 'success' && needs.release.outputs.tag != '' }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: $/.github/workflows/pages.yml
+    with:
+      ref: refs/tags/${{ needs.release.outputs.tag }}
+      build-command: ${{ inputs.docs-build-command }}
+      path: ${{ inputs.docs-path }}
