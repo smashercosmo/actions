@@ -21,7 +21,7 @@ import {
 import { createMockPush } from "./scripts/create-mock-push.ts";
 import { editManifest } from "./scripts/edit-manifest.ts";
 import { git } from "./scripts/exec.ts";
-import { getReleaseWorkflow } from "./workflows.ts";
+import { PRINT_TAG_STEP, getReleaseWorkflow } from "./workflows.ts";
 
 /** The fixture starts at 1.0.0; a minor version bump targets 1.1.0. */
 const RELEASE_PR_TITLE = "chore: release acme-lib@1.1.0";
@@ -277,6 +277,10 @@ describe("release.yml", () => {
         body: expect.stringContaining("Add a feature."),
       },
     ]);
+    /** Jobs that run after the release get its tag. */
+    expect(getStep(result, "tag", PRINT_TAG_STEP).output).toContain(
+      "The tag is 'v1.1.0'",
+    );
     /**
      * Publishing releases uses `github.token`, not the GitHub App token used
      * for release PRs.
@@ -406,6 +410,52 @@ describe("release.yml", () => {
       getStep(result, "release", "Create GitHub releases").output,
     ).toContain("Release v1.0.0 already exists, skipping");
     expect(github.requests).toStrictEqual([]);
+    /** A release created by an earlier run still gives its tag. */
+    expect(getStep(result, "tag", PRINT_TAG_STEP).output).toContain(
+      "The tag is 'v1.0.0'",
+    );
+    /**
+     * Without `docs`, nothing is deployed, even though v1.0.0 is released: the
+     * `build` job of `pages.yml` doesn't even start.
+     */
+    expect(result.jobs).not.toHaveProperty("build");
+  });
+
+  it("should not deploy the docs while the current version isn't on npm, with `docs`", async ({
+    act,
+    consumer,
+    signal,
+  }) => {
+    expect.hasAssertions();
+
+    const repo = consumer.localRepoDir;
+    /**
+     * A version that isn't on npm and isn't a release PR merge, so the run
+     * neither stages nor releases it.
+     */
+    editManifest({
+      repo,
+      dir: CONSUMER_PACKAGE_DIR,
+      edit: (manifest) => ({ ...manifest, version: "1.0.1" }),
+    });
+
+    const result = await act()
+      .withWorkflow({ body: getReleaseWorkflow({ npm: true, docs: true }) })
+      .withEvent("push", createMockPush({ repo }))
+      .run({ signal });
+
+    assertStatus(result, ActExecStatus.SUCCESS);
+    expect(
+      getStep(result, "release", "Create GitHub releases").output,
+    ).toContain(`${CONSUMER_PACKAGE}@1.0.1 isn't on npm yet`);
+    expect(getStep(result, "tag", PRINT_TAG_STEP).output).toContain(
+      "The tag is ''",
+    );
+    /**
+     * Nothing is deployed, so the site keeps the docs of the last release, not
+     * of the version on `main`.
+     */
+    expect(result.jobs).not.toHaveProperty("build");
   });
 
   it("should publish the GitHub release of a private package right away, with `npm` and `includePrivate`", async ({

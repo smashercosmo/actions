@@ -22,6 +22,13 @@ inputs:
       30 seconds. `0` checks once. Used only when `npm` is enabled.
     default: "0"
 
+outputs:
+  tag:
+    description:
+      Tag of the current version, `v<version>`, once its release exists, whether
+      this run created it or an earlier one did. Empty while the version isn't on
+      npm yet, and when no package needs a release.
+
 runs:
   using: node24
   main: index.ts
